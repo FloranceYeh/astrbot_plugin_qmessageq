@@ -109,8 +109,9 @@ class QmessageQToolbox(Star):
     """Multi-function QQ message toolbox for aiocqhttp (NapCat/OneBot).
 
     Provides image summary steganography (``himg``), forged forward messages
-    (``fake``), real ``@`` mentions (``at``) and an LLM ``at_user`` tool that
-    prepends an ``@`` to the bot's reply.
+    (``fake``), real ``@`` mentions (``at``), contact cards (``card``), fixed
+    dice/rps faces (``dice``/``rps``) and an LLM ``at_user`` tool that prepends
+    an ``@`` to the bot's reply.
     """
 
     def __init__(self, context: Context, config: dict | None = None) -> None:
@@ -124,6 +125,35 @@ class QmessageQToolbox(Star):
     def _check_at_permission(self, event: AstrMessageEvent) -> bool:
         """Whether the event sender is allowed to use the admin-only at command."""
         return not self.config.get("at_admin_only", True) or event.is_admin()
+
+    async def _send_direct(self, event: AstrMessageEvent, message: list) -> bool:
+        """Send a raw OneBot message to the conversation, returning success.
+
+        Args:
+            event: The message event; the target is its group or sender.
+            message: OneBot message segment list.
+        """
+        is_group = bool(event.get_group_id())
+        target = event.get_group_id() if is_group else event.get_sender_id()
+        if not target or not target.isdigit():
+            return False
+        routing: dict[str, Any] = {}
+        self_id = getattr(event.message_obj, "self_id", None)
+        if self_id:
+            routing["self_id"] = self_id
+        try:
+            if is_group:
+                await event.bot.send_group_msg(
+                    group_id=int(target), message=message, **routing
+                )
+            else:
+                await event.bot.send_private_msg(
+                    user_id=int(target), message=message, **routing
+                )
+        except Exception as exc:
+            logger.error("direct send failed: %s", exc)
+            return False
+        return True
 
     async def _resolve_member_qq(
         self, event: AstrMessageEvent, target: str
@@ -375,6 +405,82 @@ class QmessageQToolbox(Star):
         if text.strip():
             chain.append(Comp.Plain(text))
         yield event.chain_result(chain)
+
+    @filter.command("card")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def card(self, event: AstrMessageEvent, contact_type: str, contact_id: str):
+        """Send a real contact card (recommend friend/group).
+
+        Usage: ``/card qq <QQ号>`` sends that user's business card,
+        ``/card group <群号>`` sends the group's card. NapCat builds the card
+        from the real contact's profile, so the ID must exist.
+        """
+        if not self._check_permission(event):
+            yield event.plain_result("Permission denied: this command is admin-only.")
+            return
+        kind = contact_type.lower()
+        if kind in ("qq", "user", "friend"):
+            kind = "qq"
+        elif kind == "group":
+            pass
+        else:
+            yield event.plain_result("Invalid card type: use `qq` or `group`.")
+            return
+        if not contact_id.isdigit():
+            yield event.plain_result("Invalid contact id.")
+            return
+        message = [{"type": "contact", "data": {"type": kind, "id": contact_id}}]
+        if not await self._send_direct(event, message):
+            yield event.plain_result("Failed to send the contact card.")
+            return
+        event.should_call_llm(True)
+
+    @filter.command("dice")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def dice(self, event: AstrMessageEvent, value: str):
+        """Send a dice face with a fixed result.
+
+        Usage: ``/dice <1-6>``.
+        """
+        if not self._check_permission(event):
+            yield event.plain_result("Permission denied: this command is admin-only.")
+            return
+        if not value.isdigit() or not (1 <= int(value) <= 6):
+            yield event.plain_result("Invalid dice value: use 1-6.")
+            return
+        message = [{"type": "face", "data": {"id": "358", "resultId": value}}]
+        if not await self._send_direct(event, message):
+            yield event.plain_result("Failed to send the dice face.")
+            return
+        event.should_call_llm(True)
+
+    @filter.command("rps")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def rps(self, event: AstrMessageEvent, value: str):
+        """Send a rock-paper-scissors face with a fixed result.
+
+        Usage: ``/rps <石头|剪刀|布>`` (or ``1/2/3``).
+        """
+        if not self._check_permission(event):
+            yield event.plain_result("Permission denied: this command is admin-only.")
+            return
+        mapping = {
+            "石头": "1",
+            "剪刀": "2",
+            "布": "3",
+            "1": "1",
+            "2": "2",
+            "3": "3",
+        }
+        result = mapping.get(value.strip())
+        if result is None:
+            yield event.plain_result("Invalid rps: use 石头/剪刀/布 (or 1/2/3).")
+            return
+        message = [{"type": "face", "data": {"id": "359", "resultId": result}}]
+        if not await self._send_direct(event, message):
+            yield event.plain_result("Failed to send the rps face.")
+            return
+        event.should_call_llm(True)
 
     @filter.llm_tool(name="at_user")
     async def at_user(

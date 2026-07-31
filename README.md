@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.jpg" alt="QmessageQ Logo" width="180" />
+  <img src="logo.png" alt="QmessageQ Logo" width="180" />
 </p>
 
 <h1 align="center">QmessageQ</h1>
@@ -11,6 +11,8 @@
 - **图片藏文案（`/himg`）**：把文案塞进图片消息的 `summary` 字段后重发，对端客户端显示的是文案而非 `[图片]` 占位。
 - **转发消息伪装（`/fake`）**：发送合并转发消息，伪造节点的昵称与 QQ 号，还可用 `头像=` / `ava=` 让节点显示指定 QQ 号的头像；支持 `||` 分隔多条消息伪造一段群聊记录；消息附带图片时会伪装成第一个人发的图。
 - **真 @（`/at`）**：发送真实的 @ 提及或 @全体成员；支持群昵称/群名片解析与随机 @ 多名成员。
+- **名片（`/card`）**：发送指定 QQ 或群的真实推荐名片卡片。
+- **固定骰子/猜拳（`/dice`、`/rps`）**：发出点数/结果固定的骰子与猜拳魔法表情。
 - **LLM @ 工具（`at_user`）**：让 LLM 在回复开头 @ 指定用户或全体成员，目标支持群昵称/群名片、QQ 号或 `all`。
 
 ## 配置
@@ -68,6 +70,22 @@
 - `qq` 为群成员昵称/群名片时，会自动解析为对应 QQ 号再 @（仅群聊有效）。
 - `qq=random`（或 `r`）时随机 @ 群成员，`文本` 开头为数字则视为 @ 人数，如 `/at random 3 开黑` 随机 @ 3 人（默认 1 人）。
 
+### 名片
+
+```
+/card qq <QQ号>
+/card group <群号>
+```
+发送该 QQ 或该群的真实推荐名片卡片（NapCat 按目标 ID 生成，ID 必须真实存在）。
+
+### 固定骰子 / 猜拳
+
+```
+/dice <1-6>
+/rps <石头|剪刀|布>
+```
+发出点数/结果固定的骰子或猜拳魔法表情（依赖 NapCat 对 `face` 段 `resultId` 的透传，属于未文档化特性）。
+
 ## LLM 工具
 
 工具名：`at_user`
@@ -81,7 +99,7 @@
 
 ## 说明
 
-- 命令名固定为 `himg` / `fake` / `at`（AstrBot 的 `@filter.command` 在导入时注册，暂不支持按配置动态改名）。
+- 命令名固定为 `himg` / `fake` / `at` / `card` / `dice` / `rps`（AstrBot 的 `@filter.command` 在导入时注册，暂不支持按配置动态改名）。
 - `himg` 依赖协议端透传图片段 `summary` 字段（NapCat / LLOneBot 支持），实际渲染效果请以你的客户端为准。
 - `fake` 节点的头像由节点的发送人 QQ 号决定（NapCat 按 `user_id` 渲染），`头像=` / `ava=` 实质是替换节点的发送人 QQ。
 - 仅支持 aiocqhttp（OneBot v11）平台。
