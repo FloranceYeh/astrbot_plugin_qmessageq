@@ -67,21 +67,31 @@ def find_attached_image(messages: list) -> Image | None:
     return None
 
 
-_AVATAR_SUFFIX_RE = re.compile(r"(?:^|\s)头像=(\S+)$")
+_AVATAR_SUFFIX_RE = re.compile(r"(?:^|\s)(?:头像|ava)=(\S+)$")
+
+
+def build_qq_avatar_url(qq: str) -> str:
+    """Build the QQ avatar URL for a QQ number."""
+    return f"https://q.qlogo.cn/headimg_dl?dst_uin={qq}&spec=640"
 
 
 def split_avatar_marker(text: str) -> tuple[str, str]:
-    """Strip a trailing ``头像=<url>`` marker from a node's text.
+    """Strip a trailing ``头像=<url|qq>`` / ``ava=<url|qq>`` marker.
 
     Args:
         text: The raw node text, e.g. ``"你好 头像=https://..."``.
 
     Returns:
         A ``(text, avatar_url)`` pair with the marker removed from ``text``.
+        When the marker value is a pure QQ number, it is expanded to the
+        corresponding QQ avatar URL.
     """
     match = _AVATAR_SUFFIX_RE.search(text)
     if match:
-        return text[: match.start()].strip(), match.group(1)
+        avatar = match.group(1)
+        if avatar.isdigit():
+            avatar = build_qq_avatar_url(avatar)
+        return text[: match.start()].strip(), avatar
     return text, ""
 
 
@@ -216,7 +226,8 @@ class QmessageQToolbox(Star):
 
             /fake 张三 10001 第一条 || 李四 10002 第二条 || 张三 10001 第三条
 
-        Append ``头像=<url>`` to a node's text to override its sender avatar.
+        Append ``头像=<url|qq>`` (alias ``ava=``) to a node's text to override
+        its sender avatar; a pure QQ number resolves to that user's avatar.
         An attached image is forwarded as sent by the first forged user.
         """
         if not self._check_permission(event):
