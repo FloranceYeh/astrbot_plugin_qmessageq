@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import re
 from typing import Any
 
@@ -45,6 +46,64 @@ def resolve_member_qq(members: list, target: str) -> str | None:
     return None
 
 
+def find_attached_image(messages: list) -> Image | None:
+    """Return an image attached to the message, including one in a reply chain.
+
+    Args:
+        messages: The message component list of an event.
+
+    Returns:
+        The first ``Image`` found at the top level, falling back to an image
+        inside a ``Reply`` chain, or ``None`` when there is none.
+    """
+    for seg in messages:
+        if isinstance(seg, Image):
+            return seg
+    for seg in messages:
+        if isinstance(seg, Comp.Reply):
+            for img in seg.chain or []:
+                if isinstance(img, Image):
+                    return img
+    return None
+
+
+_AVATAR_SUFFIX_RE = re.compile(r"(?:^|\s)头像=(\S+)$")
+
+
+def split_avatar_marker(text: str) -> tuple[str, str]:
+    """Strip a trailing ``头像=<url>`` marker from a node's text.
+
+    Args:
+        text: The raw node text, e.g. ``"你好 头像=https://..."``.
+
+    Returns:
+        A ``(text, avatar_url)`` pair with the marker removed from ``text``.
+    """
+    match = _AVATAR_SUFFIX_RE.search(text)
+    if match:
+        return text[: match.start()].strip(), match.group(1)
+    return text, ""
+
+
+class AvatarNode(Node):
+    """A forward-message node with an optional custom avatar URL.
+
+    NapCat / LLOneBot render the extra ``avatar`` node field as the sender's
+    avatar inside merged forward messages.
+    """
+
+    avatar: str = ""
+
+    def __init__(self, content: list, avatar: str = "", **kwargs) -> None:
+        super().__init__(content=content, avatar=avatar, **kwargs)
+
+    async def to_dict(self) -> dict:
+        data = await super().to_dict()
+        if self.avatar:
+            data["data"]["avatar"] = self.avatar
+        return data
+
+
 class QmessageQToolbox(Star):
     """Multi-function QQ message toolbox for aiocqhttp (NapCat/OneBot).
 
@@ -61,26 +120,36 @@ class QmessageQToolbox(Star):
         """Whether the event sender is allowed to use admin-only commands."""
         return not self.config.get("admin_only", True) or event.is_admin()
 
-    def _check_llm_tool_permission(self, event: AstrMessageEvent) -> bool:
-        """Whether the event sender is allowed to use the admin-only LLM tool."""
-        return not self.config.get("llm_tool_admin_only", True) or event.is_admin()
+    def _check_at_permission(self, event: AstrMessageEvent) -> bool:
+        """Whether the event sender is allowed to use the admin-only at command."""
+        return not self.config.get("at_admin_only", True) or event.is_admin()
+
+    async def _resolve_member_qq(
+        self, event: AstrMessageEvent, target: str
+    ) -> str | None:
+        """Resolve an exact group nickname/card to a QQ number, else ``None``."""
+        try:
+            group = await event.get_group()
+        except Exception as exc:
+            logger.warning("failed to fetch the group: %s", exc)
+            group = None
+        if group is None:
+            return None
+        return resolve_member_qq(list(group.members or []), target)
 
     @filter.command("himg")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     async def himg(self, event: AstrMessageEvent, text: GreedyStr):
         """Hide a text into an image's summary field and resend the image.
 
-        Usage: ``/himg <text>`` with an attached image, or
-        ``/himg <text> <image_url>``.
+        Usage: ``/himg <text>`` with an attached image (including a quoted
+        image), or ``/himg <text> <image_url>``.
         """
         if not self._check_permission(event):
             yield event.plain_result("Permission denied: this command is admin-only.")
             return
 
-        image = next(
-            (seg for seg in event.get_messages() if isinstance(seg, Image)),
-            None,
-        )
+        image = find_attached_image(event.get_messages())
         url = ""
         if image is None:
             parts = text.split()
@@ -140,10 +209,15 @@ class QmessageQToolbox(Star):
     async def fake(
         self, event: AstrMessageEvent, name: str, uin: str, content: GreedyStr
     ):
-        """Send a merge-forward message with a forged sender.
+        """Send a merge-forward message with forged senders.
 
-        Usage: ``/fake <nickname> <qq> <text>``, optionally with an attached
-        image which is forwarded as sent by the forged user.
+        Usage: ``/fake <昵称> <QQ> <文本>`` for a single node, or chain multiple
+        nodes with ``||`` to fake a whole chat log::
+
+            /fake 张三 10001 第一条 || 李四 10002 第二条 || 张三 10001 第三条
+
+        Append ``头像=<url>`` to a node's text to override its sender avatar.
+        An attached image is forwarded as sent by the first forged user.
         """
         if not self._check_permission(event):
             yield event.plain_result("Permission denied: this command is admin-only.")
@@ -152,30 +226,66 @@ class QmessageQToolbox(Star):
             yield event.plain_result("Invalid QQ number.")
             return
 
-        node_content: list = []
-        image = next(
-            (seg for seg in event.get_messages() if isinstance(seg, Image)),
-            None,
-        )
+        image = find_attached_image(event.get_messages())
+        segments = [seg.strip() for seg in content.split("||") if seg.strip()]
+        first_text = segments[0] if segments else ""
+        first_text, first_avatar = split_avatar_marker(first_text)
+        nodes: list = []
+
+        first_content: list = []
         if image is not None:
-            node_content.append(image)
-        if content.strip():
-            node_content.append(Comp.Plain(content))
-        if not node_content:
+            first_content.append(image)
+        if first_text:
+            first_content.append(Comp.Plain(first_text))
+        if not first_content:
             yield event.plain_result("Nothing to forward: add text or an image.")
             return
+        nodes.append(
+            AvatarNode(
+                content=first_content, name=name, uin=uin, avatar=first_avatar
+            )
+        )
 
-        node = Node(content=node_content, name=name, uin=uin)
-        yield event.chain_result([node])
+        for seg in segments[1:]:
+            parts = seg.split(maxsplit=2)
+            if len(parts) < 2:
+                yield event.plain_result(
+                    "Invalid node: expected `<昵称> <QQ> <文本>`, separated by `||`.",
+                )
+                return
+            n_name, n_uin, n_text = (
+                parts[0],
+                parts[1],
+                parts[2] if len(parts) > 2 else "",
+            )
+            if not n_uin.isdigit():
+                yield event.plain_result(f"Invalid QQ number in node: {n_uin}")
+                return
+            n_text, n_avatar = split_avatar_marker(n_text)
+            node_content: list = []
+            if n_text.strip():
+                node_content.append(Comp.Plain(n_text))
+            if not node_content:
+                yield event.plain_result("Nothing to forward: add text to each node.")
+                return
+            nodes.append(
+                AvatarNode(
+                    content=node_content, name=n_name, uin=n_uin, avatar=n_avatar
+                )
+            )
+
+        yield event.chain_result(nodes)
 
     @filter.command("at")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     async def at(self, event: AstrMessageEvent, qq: str, text: GreedyStr):
-        """Send a real @ mention (or @everyone) followed by optional text.
+        """Send real @ mentions (or @everyone) followed by optional text.
 
-        Usage: ``/at <qq|all> <text>``.
+        Usage: ``/at <qq|all|random> <text>``. ``<qq>`` accepts a QQ number, an
+        exact group nickname/card, ``all`` for @everyone, or ``random [count]``
+        to @ a few random members.
         """
-        if not self._check_permission(event):
+        if not self._check_at_permission(event):
             yield event.plain_result("Permission denied: this command is admin-only.")
             return
 
@@ -185,11 +295,47 @@ class QmessageQToolbox(Star):
                 yield event.plain_result("@everyone is only valid in group chats.")
                 return
             chain.append(Comp.AtAll())
+        elif qq in ("random", "r"):
+            if not event.get_group_id():
+                yield event.plain_result("Random @ is only valid in group chats.")
+                return
+            count = 1
+            parts = text.split(maxsplit=1) if text.strip() else []
+            if parts and parts[0].isdigit():
+                count = int(parts[0])
+                text = parts[1] if len(parts) > 1 else ""
+            try:
+                group = await event.get_group()
+            except Exception as exc:
+                logger.warning("at: failed to fetch the group: %s", exc)
+                group = None
+            members = list(getattr(group, "members", None) or [])
+            if not members:
+                yield event.plain_result("Failed to load group members.")
+                return
+            self_id = getattr(event.message_obj, "self_id", None)
+            candidates = [
+                m
+                for m in members
+                if str(getattr(m, "user_id", ""))
+                and str(getattr(m, "user_id", "")) != str(self_id)
+            ]
+            if not candidates:
+                yield event.plain_result("No other group members to @.")
+                return
+            for member in random.sample(candidates, min(count, len(candidates))):
+                chain.append(Comp.At(qq=str(getattr(member, "user_id", ""))))
         elif qq.isdigit():
             chain.append(Comp.At(qq=qq))
         else:
-            yield event.plain_result("Invalid qq: use a QQ number or 'all'.")
-            return
+            resolved = await self._resolve_member_qq(event, qq)
+            if resolved is None:
+                yield event.plain_result(
+                    f"Invalid target '{qq}': use a QQ number, an exact group "
+                    "nickname/card, 'all', or 'random'.",
+                )
+                return
+            chain.append(Comp.At(qq=resolved))
         if text.strip():
             chain.append(Comp.Plain(text))
         yield event.chain_result(chain)
@@ -220,7 +366,7 @@ class QmessageQToolbox(Star):
                 group chats.
             at_all(boolean): When true, @everyone is used and target is ignored.
         """
-        if not self._check_llm_tool_permission(event):
+        if not self._check_permission(event):
             return "Permission denied: at_user is restricted to admins."
         if at_all or target.strip().lower() == "all":
             if not event.get_group_id():
