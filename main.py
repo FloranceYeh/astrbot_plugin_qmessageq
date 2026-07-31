@@ -70,48 +70,39 @@ def find_attached_image(messages: list) -> Image | None:
 _AVATAR_SUFFIX_RE = re.compile(r"(?:^|\s)(?:头像|ava)=(\S+)$")
 
 
-def build_qq_avatar_url(qq: str) -> str:
-    """Build the QQ avatar URL for a QQ number."""
-    return f"https://q.qlogo.cn/headimg_dl?dst_uin={qq}&spec=640"
-
-
 def split_avatar_marker(text: str) -> tuple[str, str]:
-    """Strip a trailing ``头像=<url|qq>`` / ``ava=<url|qq>`` marker.
+    """Strip a trailing ``头像=<qq>`` / ``ava=<qq>`` marker from node text.
 
     Args:
-        text: The raw node text, e.g. ``"你好 头像=https://..."``.
+        text: The raw node text, e.g. ``"你好 ava=10001"``.
 
     Returns:
-        A ``(text, avatar_url)`` pair with the marker removed from ``text``.
-        When the marker value is a pure QQ number, it is expanded to the
-        corresponding QQ avatar URL.
+        A ``(text, qq)`` pair with the marker removed from ``text``. The marker
+        value must be a QQ number; NapCat derives a node's avatar from its
+        ``user_id`` and cannot render custom avatar URLs.
     """
     match = _AVATAR_SUFFIX_RE.search(text)
     if match:
-        avatar = match.group(1)
-        if avatar.isdigit():
-            avatar = build_qq_avatar_url(avatar)
-        return text[: match.start()].strip(), avatar
+        return text[: match.start()].strip(), match.group(1)
     return text, ""
 
 
-class AvatarNode(Node):
-    """A forward-message node with an optional custom avatar URL.
+def effective_node_qq(uin: str, avatar_marker: str) -> str | None:
+    """The node's effective QQ after an ``头像=/ava=`` override.
 
-    NapCat / LLOneBot render the extra ``avatar`` node field as the sender's
-    avatar inside merged forward messages.
+    Args:
+        uin: The QQ from the node's own field.
+        avatar_marker: The raw marker value, empty when absent.
+
+    Returns:
+        The QQ to use as the node's ``user_id`` (marker wins), or ``None`` when
+        the marker is present but not a pure QQ number.
     """
-
-    avatar: str = ""
-
-    def __init__(self, content: list, avatar: str = "", **kwargs) -> None:
-        super().__init__(content=content, avatar=avatar, **kwargs)
-
-    async def to_dict(self) -> dict:
-        data = await super().to_dict()
-        if self.avatar:
-            data["data"]["avatar"] = self.avatar
-        return data
+    if not avatar_marker:
+        return uin
+    if not avatar_marker.isdigit():
+        return None
+    return avatar_marker
 
 
 class QmessageQToolbox(Star):
@@ -213,6 +204,8 @@ class QmessageQToolbox(Star):
         except Exception as exc:
             logger.error("himg: failed to send the hidden image message: %s", exc)
             yield event.plain_result("Failed to send the hidden image message.")
+            return
+        event.should_call_llm(True)
 
     @filter.command("fake")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
@@ -226,8 +219,9 @@ class QmessageQToolbox(Star):
 
             /fake 张三 10001 第一条 || 李四 10002 第二条 || 张三 10001 第三条
 
-        Append ``头像=<url|qq>`` (alias ``ava=``) to a node's text to override
-        its sender avatar; a pure QQ number resolves to that user's avatar.
+        Append ``头像=<qq>`` (alias ``ava=``) to a node's text to use that QQ
+        number's avatar; NapCat renders the avatar of a node's ``user_id`` and
+        cannot display custom avatar URLs.
         An attached image is forwarded as sent by the first forged user.
         """
         if not self._check_permission(event):
@@ -241,6 +235,13 @@ class QmessageQToolbox(Star):
         segments = [seg.strip() for seg in content.split("||") if seg.strip()]
         first_text = segments[0] if segments else ""
         first_text, first_avatar = split_avatar_marker(first_text)
+        first_uin = effective_node_qq(uin, first_avatar)
+        if first_uin is None:
+            yield event.plain_result(
+                "Invalid custom avatar: only a QQ number is supported "
+                "(NapCat cannot render custom avatar URLs).",
+            )
+            return
         nodes: list = []
 
         first_content: list = []
@@ -251,11 +252,7 @@ class QmessageQToolbox(Star):
         if not first_content:
             yield event.plain_result("Nothing to forward: add text or an image.")
             return
-        nodes.append(
-            AvatarNode(
-                content=first_content, name=name, uin=uin, avatar=first_avatar
-            )
-        )
+        nodes.append(Node(content=first_content, name=name, uin=first_uin))
 
         for seg in segments[1:]:
             parts = seg.split(maxsplit=2)
@@ -273,17 +270,20 @@ class QmessageQToolbox(Star):
                 yield event.plain_result(f"Invalid QQ number in node: {n_uin}")
                 return
             n_text, n_avatar = split_avatar_marker(n_text)
+            n_uin_eff = effective_node_qq(n_uin, n_avatar)
+            if n_uin_eff is None:
+                yield event.plain_result(
+                    f"Invalid custom avatar '{n_avatar}': only a QQ number is "
+                    "supported (NapCat cannot render custom avatar URLs).",
+                )
+                return
             node_content: list = []
             if n_text.strip():
                 node_content.append(Comp.Plain(n_text))
             if not node_content:
                 yield event.plain_result("Nothing to forward: add text to each node.")
                 return
-            nodes.append(
-                AvatarNode(
-                    content=node_content, name=n_name, uin=n_uin, avatar=n_avatar
-                )
-            )
+            nodes.append(Node(content=node_content, name=n_name, uin=n_uin_eff))
 
         is_group = bool(event.get_group_id())
         target = event.get_group_id() if is_group else event.get_sender_id()
@@ -309,6 +309,8 @@ class QmessageQToolbox(Star):
         except Exception as exc:
             logger.error("fake: failed to send the forward message: %s", exc)
             yield event.plain_result("Failed to send the forward message.")
+            return
+        event.should_call_llm(True)
 
     @filter.command("at")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
