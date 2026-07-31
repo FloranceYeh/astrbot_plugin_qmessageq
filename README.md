@@ -7,7 +7,6 @@ QmessageQ 多功能 QQ 消息工具箱（适配 aiocqhttp / NapCat / OneBot v11�
 - **图片藏文案（`/himg`）**：把文案塞进图片消息的 `summary` 字段后重发，对端客户端显示的是文案而非 `[图片]` 占位。
 - **转发消息伪装（`/fake`）**：发送合并转发消息，伪造节点的昵称与 QQ 号，还可用 `头像=<URL>` 自定义节点头像；支持 `||` 分隔多条消息伪造一段群聊记录；消息附带图片时会伪装成第一个人发的图。
 - **真 @（`/at`）**：发送真实的 @ 提及或 @全体成员；支持群昵称/群名片解析与随机 @ 多名成员。
-- **伪 @（`/fakeat`）**：发送指向不存在 QQ 号（`0`）的 @ 段，渲染类似 @ 但不会真的提醒任何人。
 - **LLM @ 工具（`at_user`）**：让 LLM 在回复开头 @ 指定用户或全体成员，目标支持群昵称/群名片、QQ 号或 `all`。
 
 ## 配置
@@ -65,13 +64,6 @@ QmessageQ 多功能 QQ 消息工具箱（适配 aiocqhttp / NapCat / OneBot v11�
 - `qq` 为群成员昵称/群名片时，会自动解析为对应 QQ 号再 @（仅群聊有效）。
 - `qq=random`（或 `r`）时随机 @ 群成员，`文本` 开头为数字则视为 @ 人数，如 `/at random 3 开黑` 随机 @ 3 人（默认 1 人）。
 
-### 伪 @
-
-```
-/fakeat <昵称> <文本>
-```
-发送 `at`（qq=`0`）+ 文本，看起来像 @ 但不会通知任何人。
-
 ## LLM 工具
 
 工具名：`at_user`
@@ -85,7 +77,7 @@ QmessageQ 多功能 QQ 消息工具箱（适配 aiocqhttp / NapCat / OneBot v11�
 
 ## 说明
 
-- 命令名固定为 `himg` / `fake` / `at` / `fakeat`（AstrBot 的 `@filter.command` 在导入时注册，暂不支持按配置动态改名）。
+- 命令名固定为 `himg` / `fake` / `at`（AstrBot 的 `@filter.command` 在导入时注册，暂不支持按配置动态改名）。
 - `himg` 依赖协议端透传图片段 `summary` 字段（NapCat / LLOneBot 支持），实际渲染效果请以你的客户端为准。
-- `fake` 的 `avatar` 字段与 `fakeat` 的伪 @ 均依赖 NapCat / LLOneBot 对节点的额外渲染支持，效果依版本与客户端而定。
+- `fake` 的 `avatar` 字段依赖 NapCat / LLOneBot 对节点的额外渲染支持，效果依版本与客户端而定。
 - 仅支持 aiocqhttp（OneBot v11）平台。

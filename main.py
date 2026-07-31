@@ -108,8 +108,8 @@ class QmessageQToolbox(Star):
     """Multi-function QQ message toolbox for aiocqhttp (NapCat/OneBot).
 
     Provides image summary steganography (``himg``), forged forward messages
-    (``fake``), real/pseudo ``@`` mentions (``at``/``fakeat``) and an LLM
-    ``at_user`` tool that prepends an ``@`` to the bot's reply.
+    (``fake``), real ``@`` mentions (``at``) and an LLM ``at_user`` tool that
+    prepends an ``@`` to the bot's reply.
     """
 
     def __init__(self, context: Context, config: dict | None = None) -> None:
@@ -274,7 +274,30 @@ class QmessageQToolbox(Star):
                 )
             )
 
-        yield event.chain_result(nodes)
+        is_group = bool(event.get_group_id())
+        target = event.get_group_id() if is_group else event.get_sender_id()
+        if not target or not target.isdigit():
+            yield event.plain_result("Failed to resolve the conversation target.")
+            return
+
+        payload: dict[str, Any] = {"messages": []}
+        for node in nodes:
+            payload["messages"].append(await node.to_dict())
+        if is_group:
+            payload["group_id"] = int(target)
+        else:
+            payload["user_id"] = int(target)
+        self_id = getattr(event.message_obj, "self_id", None)
+        if self_id:
+            payload["self_id"] = self_id
+        try:
+            if is_group:
+                await event.bot.call_action("send_group_forward_msg", **payload)
+            else:
+                await event.bot.call_action("send_private_forward_msg", **payload)
+        except Exception as exc:
+            logger.error("fake: failed to send the forward message: %s", exc)
+            yield event.plain_result("Failed to send the forward message.")
 
     @filter.command("at")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
@@ -338,20 +361,6 @@ class QmessageQToolbox(Star):
             chain.append(Comp.At(qq=resolved))
         if text.strip():
             chain.append(Comp.Plain(text))
-        yield event.chain_result(chain)
-
-    @filter.command("fakeat")
-    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
-    async def fakeat(self, event: AstrMessageEvent, name: str, text: GreedyStr):
-        """Send a pseudo @ mention that renders like an @ but notifies nobody.
-
-        Usage: ``/fakeat <nickname> <text>``. Uses an ``at`` segment pointing to
-        a non-existent QQ number (0); rendering may vary by client.
-        """
-        if not self._check_permission(event):
-            yield event.plain_result("Permission denied: this command is admin-only.")
-            return
-        chain = [Comp.At(qq="0"), Comp.Plain(f"{name} {text}".strip())]
         yield event.chain_result(chain)
 
     @filter.llm_tool(name="at_user")

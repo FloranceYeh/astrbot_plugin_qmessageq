@@ -2,7 +2,7 @@
   "admin_only": {
     "description": "命令仅管理员可用",
     "type": "bool",
-    "hint": "开启后，所有命令（himg、fake、at、fakeat）仅对管理员生效；关闭后所有成员可用。",
+    "hint": "开启后，所有命令（himg、fake、at）仅对管理员生效；关闭后所有成员可用。",
     "default": true
   },
   "at_admin_only": {
