@@ -1,6 +1,10 @@
-# astrbot_plugin_QmessageQ
+<p align="center">
+  <img src="logo.jpg" alt="QmessageQ Logo" width="180" />
+</p>
 
-QmessageQ 多功能 QQ 消息工具箱（适配 aiocqhttp / NapCat / OneBot v11）。
+<h1 align="center">QmessageQ</h1>
+
+<p align="center">多功能 QQ 消息工具箱（适配 aiocqhttp / NapCat / OneBot v11）。</p>
 
 ## 功能
 
@@ -81,3 +85,7 @@ QmessageQ 多功能 QQ 消息工具箱（适配 aiocqhttp / NapCat / OneBot v11�
 - `himg` 依赖协议端透传图片段 `summary` 字段（NapCat / LLOneBot 支持），实际渲染效果请以你的客户端为准。
 - `fake` 节点的头像由节点的发送人 QQ 号决定（NapCat 按 `user_id` 渲染），`头像=` / `ava=` 实质是替换节点的发送人 QQ。
 - 仅支持 aiocqhttp（OneBot v11）平台。
+
+## 声明
+
+本插件仅供交流学习使用，请勿用于任何不正当用途（如诈骗、冒充他人、散布虚假信息等），由此产生的一切后果与作者无关。
