@@ -1,0 +1,14 @@
+{
+  "admin_only": {
+    "description": "命令仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，所有命令（himg、fake、at、fakeat）仅对管理员生效；关闭后所有成员可用。",
+    "default": true
+  },
+  "llm_tool_admin_only": {
+    "description": "LLM @ 工具（at_user）仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，LLM @ 工具（at_user）仅对管理员生效；关闭后所有成员可用。",
+    "default": true
+  }
+}

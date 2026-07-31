@@ -1,0 +1,8 @@
+name: astrbot_plugin_qmessageq
+display_name: QmessageQ工具箱
+author: Florance
+version: 1.0.0
+desc: 多功能 QQ 消息工具箱：图片 summary 藏文案（/himg）、转发消息昵称伪装（/fake）、真/伪 @（/at、/fakeat）与 LLM @ 工具（at_user）
+astrbot_version: ">=4.16,<5"
+support_platforms:
+  - aiocqhttp
