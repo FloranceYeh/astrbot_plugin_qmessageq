@@ -23,6 +23,18 @@ _MAGIC_RE = re.compile(r"<\$[^>]*>")
 _MAGIC_CATALOG_FILE = "magic_templates.json"
 _MAGIC_LIST_LIMIT = 30
 
+_MAGIC_EXPRESSIONS: list[tuple[str, str]] = [
+    ("摇手手", "<$ÿĀ\x11\x10>"),
+    ("四叶草🍀", "<$ÿĀB >"),
+    ("小爪爪", "<$ǿĀC\x01>"),
+    ("升级版小爪爪", "<$ÿĀ\x11\">"),
+    ("小心心", "<$ǿĀF\x13>"),
+    ("小熊熊", "<$ÿĀD#>"),
+    ("魔法棒🪄", "<$ǿĀB#>"),
+]
+
+_MAGIC_NAME_MAP: dict[str, str] = dict(_MAGIC_EXPRESSIONS)
+
 
 def build_image_summary_message(file: str, summary: str) -> list[dict]:
     """Build a OneBot image message carrying a custom summary text.
@@ -158,9 +170,11 @@ class QmessageQToolbox(Star):
             self._magic_file = None
         self._load_magic_learned()
 
-    def _magic_items(self) -> list[str]:
-        """Learned magic-expression templates, in order."""
-        return list(self._magic_learned)
+    def _magic_items(self) -> list[tuple[str | None, str]]:
+        """Known + learned magic expressions as ``(name, template)`` pairs."""
+        items = list(_MAGIC_EXPRESSIONS)
+        items.extend((None, t) for t in self._magic_learned)
+        return items
 
     def _load_magic_learned(self) -> None:
         if self._magic_file is None:
@@ -188,8 +202,9 @@ class QmessageQToolbox(Star):
 
     def _learn_magic_templates(self, templates: list[str]) -> None:
         changed = False
+        known = {t for _, t in _MAGIC_EXPRESSIONS}
         for t in templates:
-            if t in self._magic_learned:
+            if t in known or t in self._magic_learned:
                 continue
             self._magic_learned.append(t)
             changed = True
@@ -1160,7 +1175,7 @@ class QmessageQToolbox(Star):
         arg = expr.strip()
         if not arg:
             yield event.plain_result(
-                "Missing content: run `/magic <编号>`, `/magic list`, "
+                "Missing content: run `/magic <名称|编号>`, `/magic list`, "
                 "`/magic <模板>`, or reply to a message.",
             )
             return
@@ -1170,7 +1185,10 @@ class QmessageQToolbox(Star):
             return
         items = self._magic_items()
         if arg.isdigit() and 1 <= int(arg) <= len(items):
-            yield event.chain_result([Comp.Plain(items[int(arg) - 1])])
+            yield event.chain_result([Comp.Plain(items[int(arg) - 1][1])])
+            return
+        if arg in _MAGIC_NAME_MAP:
+            yield event.chain_result([Comp.Plain(_MAGIC_NAME_MAP[arg])])
             return
         if _MAGIC_RE.search(arg):
             self._learn_magic_templates([arg])
@@ -1181,16 +1199,18 @@ class QmessageQToolbox(Star):
         )
 
     async def _send_magic_list(self, event: AstrMessageEvent) -> None:
-        """Send all learned magic expressions as a forward message."""
+        """Send all known magic expressions as a forward message."""
         items = self._magic_items()
         if not items:
             yield event.plain_result("魔法表情目录为空。")
             return
         self_uin = str(getattr(event.message_obj, "self_id", None) or "10001")
-        nodes = [
-            Node(content=[Comp.Plain(template)], name=f"#{i}", uin=self_uin)
-            for i, template in enumerate(items[:_MAGIC_LIST_LIMIT], start=1)
-        ]
+        nodes = []
+        for i, (name, template) in enumerate(items[:_MAGIC_LIST_LIMIT], start=1):
+            label = f"#{i} {name}" if name else f"#{i}"
+            nodes.append(
+                Node(content=[Comp.Plain(template)], name=label, uin=self_uin)
+            )
         if len(items) > _MAGIC_LIST_LIMIT:
             nodes.append(
                 Node(
