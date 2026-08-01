@@ -1099,9 +1099,9 @@ class QmessageQToolbox(Star):
         QQ renders ``<$...>`` templates embedded in text as magic emoji. Stateless
         generator: ``/magic <数字序列>`` builds ``<$chr(n1)chr(n2)...>`` (e.g.
         ``/magic 255 256 17 16`` -> ``<$ÿĀ\x11\x10>`` 摇手手); ``/magic <模板>``
-        sends an arbitrary template; reply to a message containing magic
-        expressions to re-send them. Run without args for the list of tested
-        templates.
+        sends an arbitrary template; quoting a message prints each magic
+        expression as ``magic <十进制码点> | <0x 十六进制码点>`` so it can be
+        reproduced. Run without args for usage.
         """
         if not self._check_permission(event, "magic_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
@@ -1120,7 +1120,13 @@ class QmessageQToolbox(Star):
             if not templates:
                 yield event.plain_result("引用的消息里没有魔法表情模板。")
                 return
-            yield event.chain_result([Comp.Plain("".join(templates))])
+            lines = []
+            for template in templates:
+                codes = [ord(c) for c in template[2:-1]]
+                dec = " ".join(str(c) for c in codes)
+                hexes = " ".join(f"0x{c:02x}" for c in codes)
+                lines.append(f"magic {dec} | {hexes}")
+            yield event.plain_result("\n".join(lines))
             return
 
         arg = expr.strip()
