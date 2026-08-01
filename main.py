@@ -14,7 +14,7 @@ from astrbot.core.star.filter.command import GreedyStr
 
 from .faces import emoji_codepoint, hidden_faces, is_emoji_text, resolve_face_ids
 
-MAX_FACES_PER_CALL = 20
+_HFACE_LIST_LIMIT = 20
 
 
 def build_image_summary_message(file: str, summary: str) -> list[dict]:
@@ -524,11 +524,6 @@ class QmessageQToolbox(Star):
                 "a numeric id or a range `a-b`.",
             )
             return
-        if len(face_ids) > MAX_FACES_PER_CALL:
-            yield event.plain_result(
-                f"Too many faces: at most {MAX_FACES_PER_CALL} per call.",
-            )
-            return
 
         if len(face_ids) == 1:
             used = await self._apply_reaction(
@@ -625,11 +620,12 @@ class QmessageQToolbox(Star):
 
         Usage: ``/hface <名称|ID> [文本]`` sends the matching QQ faces (plus
         optional text); ``/hface 1-5`` sends every face from 1 to 5; an emoji
-        is sent literally as text (e.g. ``/hface 💢``); ``/hface list`` sends
-        all hidden faces as a forward message; ``/hface text <内容>`` sends
-        the content literally. ``<名称|ID>`` accepts a face name, an English
-        alias, a raw numeric id, a ``#``-prefixed id, or a numeric range
-        ``a-b``. Face ids follow NapCat's built-in table (see FACES.md).
+        is sent literally as text (e.g. ``/hface 💢``); ``/hface list [a-b]``
+        sends hidden faces 1..20 (or the given 1-based range, at most 20) as a
+        forward message; ``/hface text <内容>`` sends the content literally.
+        ``<名称|ID>`` accepts a face name, an English alias, a raw numeric id,
+        a ``#``-prefixed id, or a numeric range ``a-b``. Face ids follow
+        NapCat's built-in table (see FACES.md).
         """
         if not self._check_permission(event, "hface_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
@@ -642,15 +638,11 @@ class QmessageQToolbox(Star):
             )
             return
         if tokens[0] == "list":
-            self_uin = str(
-                getattr(event.message_obj, "self_id", None) or "10001"
-            )
-            nodes = [
-                Node(content=[Comp.Face(id=qsid)], name=name, uin=self_uin)
-                for qsid, name in hidden_faces()
-            ]
-            if not await self._send_forward_msg(event, nodes):
-                yield event.plain_result("Failed to send the hidden face list.")
+            error = await self._send_hidden_list(event, tokens[1:])
+            if error:
+                yield event.plain_result(error)
+                return
+            event.should_call_llm(True)
             return
         if tokens[0] == "text":
             text = " ".join(tokens[1:]).strip()
@@ -669,16 +661,55 @@ class QmessageQToolbox(Star):
                 "alias, a numeric id or a range `a-b`.",
             )
             return
-        if len(face_ids) > MAX_FACES_PER_CALL:
-            yield event.plain_result(
-                f"Too many faces: at most {MAX_FACES_PER_CALL} per call.",
-            )
-            return
         chain: list = [Comp.Face(id=face_id) for face_id in face_ids]
         text = " ".join(tokens[1:]).strip()
         if text:
             chain.append(Comp.Plain(text))
         yield event.chain_result(chain)
+
+    async def _send_hidden_list(
+        self, event: AstrMessageEvent, args: list[str]
+    ) -> str | None:
+        """Send a page of hidden faces as a forward message.
+
+        Args:
+            event: The message event; the target is its group or sender.
+            args: Optional ``a-b`` 1-based page over the hidden face list.
+
+        Returns:
+            An error message, or ``None`` on success.
+        """
+        hidden = hidden_faces()
+        total = len(hidden)
+        start, end = 1, min(_HFACE_LIST_LIMIT, total)
+        if args:
+            match = re.match(r"^(\d+)-(\d+)$", args[0])
+            if match:
+                start = max(int(match.group(1)), 1)
+                end = min(int(match.group(2)), total)
+                if end - start + 1 > _HFACE_LIST_LIMIT:
+                    end = start + _HFACE_LIST_LIMIT - 1
+            else:
+                return "Invalid page: use `/hface list a-b`, e.g. `/hface list 21-40`."
+        if start > end or start > total:
+            return f"Empty page: hidden faces range from 1 to {total}."
+        page = hidden[start - 1 : end]
+        self_uin = str(getattr(event.message_obj, "self_id", None) or "10001")
+        nodes = [
+            Node(content=[Comp.Face(id=qsid)], name=name, uin=self_uin)
+            for qsid, name in page
+        ]
+        nodes.insert(
+            0,
+            Node(
+                content=[Comp.Plain(f"隐藏表情 {start}-{end} / 共 {total} 个")],
+                name="QmessageQ",
+                uin=self_uin,
+            ),
+        )
+        if not await self._send_forward_msg(event, nodes):
+            return "Failed to send the hidden face list."
+        return None
 
     @filter.command("card")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
