@@ -2,6 +2,7 @@ name: astrbot_plugin_qmessageq
 display_name: QmessageQ 工具箱
 author: Florance
 version: 1.5.2
+repo: https://github.com/FloranceYeh/astrbot_plugin_qmessageq
 desc: 多功能 QQ 消息工具箱：图片 summary 藏文案（/himg）、转发消息伪装（/fake）、命令 @（/at）、名片（/card）、回应表情（/face）、发送表情（/hface，含隐藏表情）与 LLM @ 工具（at_user）
 astrbot_version: ">=4.16,<5"
 support_platforms:
