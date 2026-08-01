@@ -859,7 +859,7 @@ class QmessageQToolbox(Star):
             elif stype == "contact":
                 parts.append(f"[名片:{data.get('id')}]")
             elif stype == "reply":
-                continue
+                parts.append(f"[回复:{data.get('id')}]")
             else:
                 parts.append(f"[{stype}]")
         return " ".join(parts)
@@ -904,6 +904,8 @@ class QmessageQToolbox(Star):
                     content_lines.append(
                         f"卡片: {summary}" if summary else "卡片"
                     )
+            elif stype == "reply":
+                content_lines.append(f"[回复:{data.get('id')}]")
             elif stype == "forward":
                 res_id = str(data.get("id"))
                 forward_ids.append(res_id)
