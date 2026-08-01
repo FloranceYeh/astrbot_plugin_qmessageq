@@ -780,6 +780,22 @@ class QmessageQToolbox(Star):
         return None
 
     @staticmethod
+    def _extract_forward_res_id(raw: str) -> str | None:
+        """Extract a merge-forward ``resid`` from a ``com.tencent.multimsg`` card."""
+        try:
+            obj = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(obj, dict):
+            return None
+        detail = (obj.get("meta") or {}).get("detail")
+        if isinstance(detail, dict):
+            resid = detail.get("resid")
+            if resid:
+                return str(resid)
+        return None
+
+    @staticmethod
     def _json_card_summary(raw: str) -> str:
         """Extract a readable snippet from a QQ JSON card's ``data`` string."""
         try:
@@ -825,8 +841,12 @@ class QmessageQToolbox(Star):
             elif stype == "forward":
                 parts.append(f"[转发:{data.get('id')}]")
             elif stype == "json":
-                summary = cls._json_card_summary(data.get("data") or "")
-                parts.append(f"[卡片:{summary}]" if summary else "[卡片]")
+                raw = data.get("data") or ""
+                if cls._extract_forward_res_id(raw):
+                    parts.append("[转发聊天记录]")
+                else:
+                    summary = cls._json_card_summary(raw)
+                    parts.append(f"[卡片:{summary}]" if summary else "[卡片]")
             elif stype == "record":
                 parts.append("[语音]")
             elif stype == "video":
@@ -926,10 +946,16 @@ class QmessageQToolbox(Star):
                         f"@{data.get('qq') or data.get('name') or ''}"
                     )
                 elif stype == "json":
-                    summary = self._json_card_summary(data.get("data") or "")
-                    content_lines.append(
-                        f"卡片: {summary}" if summary else "卡片"
-                    )
+                    raw = data.get("data") or ""
+                    resid = self._extract_forward_res_id(raw)
+                    if resid:
+                        forward_ids.append(resid)
+                        content_lines.append(f"合并转发: res_id={resid}")
+                    else:
+                        summary = self._json_card_summary(raw)
+                        content_lines.append(
+                            f"卡片: {summary}" if summary else "卡片"
+                        )
                 elif stype == "forward":
                     res_id = str(data.get("id"))
                     forward_ids.append(res_id)
