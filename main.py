@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import random
 import re
 from typing import Any
@@ -779,7 +780,30 @@ class QmessageQToolbox(Star):
         return None
 
     @staticmethod
-    def _format_segments(segments: list) -> str:
+    def _json_card_summary(raw: str) -> str:
+        """Extract a readable snippet from a QQ JSON card's ``data`` string."""
+        try:
+            obj = json.loads(raw)
+        except (TypeError, ValueError):
+            return ""
+        if not isinstance(obj, dict):
+            return ""
+        for key in ("prompt", "title"):
+            value = obj.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:60]
+        meta = obj.get("meta")
+        if isinstance(meta, dict):
+            for sub in meta.values():
+                if isinstance(sub, dict):
+                    for key in ("title", "desc", "prompt"):
+                        value = sub.get(key)
+                        if isinstance(value, str) and value.strip():
+                            return value.strip()[:60]
+        return ""
+
+    @classmethod
+    def _format_segments(cls, segments: list) -> str:
         """Compact single-line rendering of OneBot segments."""
         parts = []
         for seg in segments or []:
@@ -800,6 +824,20 @@ class QmessageQToolbox(Star):
                 parts.append(f"@{data.get('qq') or data.get('name') or ''}")
             elif stype == "forward":
                 parts.append(f"[转发:{data.get('id')}]")
+            elif stype == "json":
+                summary = cls._json_card_summary(data.get("data") or "")
+                parts.append(f"[卡片:{summary}]" if summary else "[卡片]")
+            elif stype == "record":
+                parts.append("[语音]")
+            elif stype == "video":
+                parts.append("[视频]")
+            elif stype == "file":
+                name = data.get("name") or data.get("file") or ""
+                parts.append(f"[文件:{name}]" if name else "[文件]")
+            elif stype == "contact":
+                parts.append(f"[名片:{data.get('id')}]")
+            elif stype == "reply":
+                continue
             else:
                 parts.append(f"[{stype}]")
         return " ".join(parts)
@@ -886,6 +924,11 @@ class QmessageQToolbox(Star):
                 elif stype == "at":
                     content_lines.append(
                         f"@{data.get('qq') or data.get('name') or ''}"
+                    )
+                elif stype == "json":
+                    summary = self._json_card_summary(data.get("data") or "")
+                    content_lines.append(
+                        f"卡片: {summary}" if summary else "卡片"
                     )
                 elif stype == "forward":
                     res_id = str(data.get("id"))
