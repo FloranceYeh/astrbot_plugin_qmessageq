@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import itertools
 import json
 import random
 import re
@@ -19,11 +20,13 @@ from .faces import emoji_codepoint, hidden_faces, is_emoji_text, resolve_face_id
 _HFACE_LIST_LIMIT = 20
 _FACE_REPEAT_LIMIT = 100
 _MAGIC_RE = re.compile(r"<\$[^>]*>")
+_MAGIC_SEND_LIMIT = 100
 
 _MAGIC_HELP = (
-    "用法：/magic <数字序列>，如 /magic 178 或 /magic 255 256 17 16，"
-    "生成 <$chr(n1)chr(n2)...>。数字支持十进制或 0x 十六进制（1~0xFFFF）。\n"
-    "也可引用含魔法表情的消息提取，或直接发 <$...> 模板。"
+    "用法：/magic <字段>...，如 /magic 178 或 /magic 255 256 17 16，"
+    "生成 <$chr(...)>。每个字段支持十进制/0x 十六进制（1~0xFFFF）或 a-b 范围"
+    "（如 /magic 255 256 17 1-32，展开后一起发出，最多 100 个）。\n"
+    "也可引用含魔法表情的消息解析码点，或直接发 <$...> 模板。"
 )
 
 
@@ -37,6 +40,18 @@ def parse_code_arg(text: str) -> int | None:
     if not (1 <= value <= 0xFFFF) or 0xD800 <= value <= 0xDFFF:
         return None
     return value
+
+
+def parse_field(text: str) -> list[int] | None:
+    """Parse one magic field: a single code or an ``a-b`` range of codes."""
+    if "-" in text:
+        a, _, b = text.partition("-")
+        low, high = parse_code_arg(a), parse_code_arg(b)
+        if low is None or high is None or low > high:
+            return None
+        return list(range(low, high + 1))
+    code = parse_code_arg(text)
+    return [code] if code is not None else None
 
 
 def build_image_summary_message(file: str, summary: str) -> list[dict]:
@@ -1136,14 +1151,23 @@ class QmessageQToolbox(Star):
         if _MAGIC_RE.search(arg):
             yield event.chain_result([Comp.Plain(arg)])
             return
-        codes = []
+        fields = []
         for token in arg.split():
-            code = parse_code_arg(token)
-            if code is None:
+            values = parse_field(token)
+            if values is None:
                 yield event.plain_result(_MAGIC_HELP)
                 return
-            codes.append(code)
-        yield event.chain_result([Comp.Plain("<$" + "".join(chr(c) for c in codes) + ">")])
+            fields.append(values)
+        templates = [
+            "<$" + "".join(chr(code) for code in combo) + ">"
+            for combo in itertools.product(*fields)
+        ]
+        if len(templates) > _MAGIC_SEND_LIMIT:
+            yield event.plain_result(
+                f"Too many combinations: at most {_MAGIC_SEND_LIMIT}.",
+            )
+            return
+        yield event.chain_result([Comp.Plain("".join(templates))])
 
     @filter.command("card")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
