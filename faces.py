@@ -165,9 +165,6 @@ def resolve_face_ids(token: str) -> list[int] | None:
     return [face_id] if face_id is not None else None
 
 
-def hidden_face_lines() -> list[str]:
-    """Format the hidden faces as sorted ``"id name"`` lines."""
-    return [
-        f"{_FACE_ID_BY_NAME[name]} {name}"
-        for name in sorted(_HIDDEN_FACE_NAMES, key=_FACE_ID_BY_NAME.get)
-    ]
+def hidden_faces() -> list[tuple[int, str]]:
+    """The hidden faces as ``(id, name)`` pairs sorted by id."""
+    return sorted((_FACE_ID_BY_NAME[name], name) for name in _HIDDEN_FACE_NAMES)

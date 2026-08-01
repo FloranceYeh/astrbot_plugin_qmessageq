@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import random
 import re
 from typing import Any
@@ -11,7 +12,7 @@ from astrbot.api.message_components import Image, Node
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 
-from .faces import emoji_codepoint, hidden_face_lines, is_emoji_text, resolve_face_ids
+from .faces import emoji_codepoint, hidden_faces, is_emoji_text, resolve_face_ids
 
 MAX_FACES_PER_CALL = 20
 
@@ -195,6 +196,35 @@ class QmessageQToolbox(Star):
             return False
         return True
 
+    async def _send_forward_msg(self, event: AstrMessageEvent, nodes: list) -> bool:
+        """Send a merge-forward message built from nodes, returning success.
+
+        Args:
+            event: The message event; the target is its group or sender.
+            nodes: ``Node`` components to forward.
+        """
+        target_info = self._conversation_target(event)
+        if target_info is None:
+            return False
+        is_group, target, routing = target_info
+        payload: dict[str, Any] = {"messages": []}
+        for node in nodes:
+            payload["messages"].append(await node.to_dict())
+        if is_group:
+            payload["group_id"] = target
+        else:
+            payload["user_id"] = target
+        payload.update(routing)
+        try:
+            await event.bot.call_action(
+                "send_group_forward_msg" if is_group else "send_private_forward_msg",
+                **payload,
+            )
+        except Exception as exc:
+            logger.error("failed to send the forward message: %s", exc)
+            return False
+        return True
+
     async def _resolve_member_qq(
         self, event: AstrMessageEvent, target: str
     ) -> str | None:
@@ -350,27 +380,7 @@ class QmessageQToolbox(Star):
                 return
             nodes.append(Node(content=node_content, name=n_name, uin=n_uin_eff))
 
-        target_info = self._conversation_target(event)
-        if target_info is None:
-            yield event.plain_result("Failed to resolve the conversation target.")
-            return
-        is_group, target, routing = target_info
-
-        payload: dict[str, Any] = {"messages": []}
-        for node in nodes:
-            payload["messages"].append(await node.to_dict())
-        if is_group:
-            payload["group_id"] = target
-        else:
-            payload["user_id"] = target
-        payload.update(routing)
-        try:
-            await event.bot.call_action(
-                "send_group_forward_msg" if is_group else "send_private_forward_msg",
-                **payload,
-            )
-        except Exception as exc:
-            logger.error("fake: failed to send the forward message: %s", exc)
+        if not await self._send_forward_msg(event, nodes):
             yield event.plain_result("Failed to send the forward message.")
             return
         event.should_call_llm(True)
@@ -451,13 +461,17 @@ class QmessageQToolbox(Star):
         reacts with the matching QQ face. Append ``cancel`` to remove the
         reaction, ``big`` to send a big emoji.
 
+        A range is reacted to one by one, spaced by the configurable
+        ``face_interval``; the bot first reports the expected duration and
+        afterwards a summary when any reaction failed.
+
         NapCat uses ``set_msg_emoji_like``; other OneBot implementations that
         only provide ``set_msg_reaction`` are handled automatically.
 
         Examples:
             ``/face 微笑`` reacts with the smiling QQ face.
             ``/face 💢`` reacts with the literal 💢 emoji.
-            ``/face 66-70`` reacts with faces 66 to 70.
+            ``/face 66-70`` reacts with faces 66 to 70, one per interval.
             ``/face 爱心 cancel`` removes the bot's heart reaction.
         """
         if not self._check_permission(event, "face_admin_only"):
@@ -515,7 +529,34 @@ class QmessageQToolbox(Star):
                 f"Too many faces: at most {MAX_FACES_PER_CALL} per call.",
             )
             return
-        for face_id in face_ids:
+
+        if len(face_ids) == 1:
+            used = await self._apply_reaction(
+                event,
+                message_id=int(reply.id),
+                emoji=str(face_ids[0]),
+                set_=not cancel,
+                is_big=is_big,
+            )
+            if used is None:
+                yield event.plain_result(
+                    "Failed to set the reaction: the protocol client does not "
+                    "support any reaction API.",
+                )
+                return
+            event.should_call_llm(True)
+            return
+
+        interval = max(float(self.config.get("face_interval", 1.0)), 0.0)
+        await self._send_direct(
+            event,
+            [{"type": "text", "data": {"text": (
+                f"将依次回应 {len(face_ids)} 个表情，每个间隔 {interval:g} 秒，"
+                f"预计约 {len(face_ids) * interval:g} 秒完成。"
+            )}}],
+        )
+        failures = []
+        for idx, face_id in enumerate(face_ids):
             used = await self._apply_reaction(
                 event,
                 message_id=int(reply.id),
@@ -524,11 +565,17 @@ class QmessageQToolbox(Star):
                 is_big=is_big,
             )
             if used is None:
-                yield event.plain_result(
-                    f"Failed to react with face {face_id}: the protocol client "
-                    "does not support any reaction API.",
-                )
-                return
+                failures.append(face_id)
+            if idx < len(face_ids) - 1 and interval > 0:
+                await asyncio.sleep(interval)
+        if failures:
+            await self._send_direct(
+                event,
+                [{"type": "text", "data": {"text": (
+                    f"有 {len(failures)} 个表情回应失败："
+                    + " ".join(str(f) for f in failures)
+                )}}],
+            )
         event.should_call_llm(True)
 
     async def _apply_reaction(
@@ -578,11 +625,11 @@ class QmessageQToolbox(Star):
 
         Usage: ``/hface <名称|ID> [文本]`` sends the matching QQ faces (plus
         optional text); ``/hface 1-5`` sends every face from 1 to 5; an emoji
-        is sent literally as text (e.g. ``/hface 💢``); ``/hface list`` lists
-        all hidden faces; ``/hface text <内容>`` sends the content literally.
-        ``<名称|ID>`` accepts a face name, an English alias, a raw numeric id,
-        a ``#``-prefixed id, or a numeric range ``a-b``. Face ids follow
-        NapCat's built-in table (see FACES.md).
+        is sent literally as text (e.g. ``/hface 💢``); ``/hface list`` sends
+        all hidden faces as a forward message; ``/hface text <内容>`` sends
+        the content literally. ``<名称|ID>`` accepts a face name, an English
+        alias, a raw numeric id, a ``#``-prefixed id, or a numeric range
+        ``a-b``. Face ids follow NapCat's built-in table (see FACES.md).
         """
         if not self._check_permission(event, "hface_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
@@ -595,7 +642,15 @@ class QmessageQToolbox(Star):
             )
             return
         if tokens[0] == "list":
-            yield event.plain_result("隐藏表情：\n" + "\n".join(hidden_face_lines()))
+            self_uin = str(
+                getattr(event.message_obj, "self_id", None) or "10001"
+            )
+            nodes = [
+                Node(content=[Comp.Face(id=qsid)], name=name, uin=self_uin)
+                for qsid, name in hidden_faces()
+            ]
+            if not await self._send_forward_msg(event, nodes):
+                yield event.plain_result("Failed to send the hidden face list.")
             return
         if tokens[0] == "text":
             text = " ".join(tokens[1:]).strip()

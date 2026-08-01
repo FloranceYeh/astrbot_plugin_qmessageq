@@ -35,6 +35,12 @@
     "hint": "开启后，face 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
     "default": true
   },
+  "face_interval": {
+    "description": "face 范围回应的间隔（秒）",
+    "type": "float",
+    "hint": "多个表情（如 a-b 范围）依次回应时的间隔秒数，用于控制请求节奏；设为 0 则不停顿。默认 1 秒。",
+    "default": 1.0
+  },
   "hface_admin_only": {
     "description": "hface 命令仅管理员可用",
     "type": "bool",
