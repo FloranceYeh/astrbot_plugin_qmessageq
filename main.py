@@ -31,6 +31,8 @@ _MAGIC_EXPRESSIONS: list[tuple[str, str]] = [
     ("小心心", "<$ǿĀF\x13>"),
     ("小熊熊", "<$ÿĀD#>"),
     ("魔法棒🪄", "<$ǿĀB#>"),
+    ("钻石", "<$ǿĀD\x0e>"),
+    ("滑稽", "<$²>"),
 ]
 
 _MAGIC_NAME_MAP: dict[str, str] = dict(_MAGIC_EXPRESSIONS)
@@ -1175,8 +1177,8 @@ class QmessageQToolbox(Star):
         arg = expr.strip()
         if not arg:
             yield event.plain_result(
-                "Missing content: run `/magic <名称|编号>`, `/magic list`, "
-                "`/magic <模板>`, or reply to a message.",
+                "Missing content: run `/magic <名称|编号>`, `/magic c<ID>`, "
+                "`/magic list`, `/magic <模板>`, or reply to a message.",
             )
             return
         if arg == "list":
@@ -1190,12 +1192,20 @@ class QmessageQToolbox(Star):
         if arg in _MAGIC_NAME_MAP:
             yield event.chain_result([Comp.Plain(_MAGIC_NAME_MAP[arg])])
             return
+        if arg.lower().startswith("c") and arg[1:].isdigit():
+            code = int(arg[1:])
+            if 1 <= code <= 0xFFFF:
+                template = f"<${chr(code)}>"
+                self._learn_magic_templates([template])
+                yield event.chain_result([Comp.Plain(template)])
+                return
         if _MAGIC_RE.search(arg):
             self._learn_magic_templates([arg])
             yield event.chain_result([Comp.Plain(arg)])
             return
         yield event.plain_result(
-            f"未知的魔法表情 '{arg}'：用 `/magic list` 查看目录，或直接发 `<$...>` 模板。",
+            f"未知的魔法表情 '{arg}'：用 `/magic list` 查看目录，`/magic c<ID>` "
+            "按码点探索，或直接发 `<$...>` 模板。",
         )
 
     async def _send_magic_list(self, event: AstrMessageEvent) -> None:
