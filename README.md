@@ -19,15 +19,19 @@
 
 在 AstrBot WebUI 的插件配置中设置：
 
-- `admin_only`：开启后所有命令与 LLM `at_user` 工具仅对管理员生效，默认开启。
-- `at_admin_only`：开启后 `at` 命令仅对管理员生效，独立于 `admin_only`，默认开启。
-- `face_admin_only`：开启后 `face` 命令仅对管理员生效，独立于 `admin_only`，默认开启。
+- `admin_only`：全局兜底开关，作为各命令未单独配置时的默认值，默认开启。
+- `himg_admin_only`：`himg` 命令仅管理员可用。
+- `fake_admin_only`：`fake` 命令仅管理员可用。
+- `at_admin_only`：`at` 命令仅管理员可用。
+- `card_admin_only`：`card` 命令仅管理员可用。
+- `face_admin_only`：`face` 命令仅管理员可用。
+- `at_user_admin_only`：LLM `at_user` 工具仅管理员可用。
 
-修改配置后请重载插件。
+各命令的 `<命令名>_admin_only` 均默认开启，未设置时回退到 `admin_only`。修改配置后请重载插件。
 
 ## 命令
 
-所有命令默认仅管理员可用（`admin_only` 可关闭）；`at` 命令的权限由 `at_admin_only` 单独控制，`face` 命令的权限由 `face_admin_only` 单独控制。
+每个命令的权限由各自的 `<命令名>_admin_only` 配置单独控制，未配置时回退到 `admin_only`（默认均仅管理员可用）。
 
 ### 图片藏文案
 
@@ -87,12 +91,12 @@
 /face <表情>
 ```
 
-`<表情>` 可以是表情名（如 `微笑`）、英文别名（如 `smile`）、Emoji（如 `😀`）、数字表情 ID（如 `14`）或 `#` 加数字（如 `#14`）。bot 会对被引用的消息加上该表情回应（NapCat 的 `set_msg_reaction`）。
+`<表情>` 可以是表情名（如 `微笑`）、英文别名（如 `smile`）、Emoji（如 `😀`）、数字表情 ID（如 `14`）或 `#` 加数字（如 `#14`）。bot 会对被引用的消息加上该表情回应（NapCat 的 `set_msg_emoji_like`，其他实现自动回退到 `set_msg_reaction`）。
 
 追加参数：
 
-- `cancel`：取消该表情回应；单独执行 `/face cancel` 则取消 bot 在该消息上的所有回应。
-- `big`：发送大表情，如 `/face 爱心 big`。
+- `cancel`：取消该表情回应，如 `/face 爱心 cancel`（需要指定要取消的表情）。
+- `big`：发送大表情，如 `/face 爱心 big`（仅 `set_msg_reaction` 实现支持）。
 
 常用表情名示例：`微笑`(14)、`得意`(4)、`流泪`(5)、`大哭`(9)、`鼓掌`(41)、`亲亲`(51)、`玫瑰`(62)、`爱心`(65)、`心碎`(66)、`蛋糕`(67)、`炸弹`(69)、`便便`(73)、`拥抱`(77)、`强`(78)、`OK`(88)、`飞吻`(90)、`挥手`(98)。
 
@@ -114,7 +118,7 @@
 - 命令名固定为 `himg` / `fake` / `at` / `card` / `face`（AstrBot 的 `@filter.command` 在导入时注册，暂不支持按配置动态改名）。
 - `himg` 依赖协议端透传图片段 `summary` 字段（NapCat / LLOneBot 支持），实际渲染效果请以你的客户端为准。
 - `fake` 节点的头像由节点的发送人 QQ 号决定（NapCat 按 `user_id` 渲染），`头像=` / `ava=` 实质是替换节点的发送人 QQ。
-- `face` 依赖协议端的 `set_msg_reaction` 动作（NapCat / LLOneBot 支持），表情 ID 与 QQ 原生表情一致，非原生表情码请直接填数字 ID。
+- `face` 依赖协议端的回应动作：NapCat 使用 `set_msg_emoji_like`，LLOneBot 等实现使用 `set_msg_reaction`，插件会自动回退。表情 ID 与 QQ 原生表情一致，非原生表情码请直接填数字 ID。
 - 仅支持 aiocqhttp（OneBot v11）平台。
 
 ## 声明

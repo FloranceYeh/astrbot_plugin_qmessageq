@@ -154,6 +154,23 @@ def normalize_emoji_token(token: str) -> str:
     return "".join(ch for ch in token if ch not in _SKIN_TONE_CHARS)
 
 
+def is_unsupported_api_error(exc: Exception) -> bool:
+    """Whether an aiocqhttp exception means the API itself is unsupported.
+
+    Args:
+        exc: The exception raised by ``event.bot.call_action``.
+
+    Returns:
+        ``True`` when the client rejected the action name as unknown.
+    """
+    if getattr(exc, "retcode", None) == 1404:
+        return True
+    text = f"{getattr(exc, 'message', '')} {getattr(exc, 'wording', '')} {exc}".lower()
+    return any(
+        kw in text for kw in ("不支持的api", "unsupported", "not implemented")
+    )
+
+
 def resolve_face_id(token: str) -> int | None:
     """Resolve a face token to a QQ face id, or ``None`` when unknown.
 
@@ -211,17 +228,14 @@ class QmessageQToolbox(Star):
         super().__init__(context)
         self.config = config if config is not None else {}
 
-    def _check_permission(self, event: AstrMessageEvent) -> bool:
-        """Whether the event sender is allowed to use admin-only commands."""
-        return not self.config.get("admin_only", True) or event.is_admin()
+    def _check_permission(self, event: AstrMessageEvent, key: str) -> bool:
+        """Whether the event sender may use a command.
 
-    def _check_at_permission(self, event: AstrMessageEvent) -> bool:
-        """Whether the event sender is allowed to use the admin-only at command."""
-        return not self.config.get("at_admin_only", True) or event.is_admin()
-
-    def _check_face_permission(self, event: AstrMessageEvent) -> bool:
-        """Whether the event sender is allowed to use the admin-only face command."""
-        return not self.config.get("face_admin_only", True) or event.is_admin()
+        Each command gates on its own ``<name>_admin_only`` config, falling back
+        to the global ``admin_only`` when the specific key is not set.
+        """
+        restricted = self.config.get(key, self.config.get("admin_only", True))
+        return not restricted or event.is_admin()
 
     async def _send_direct(self, event: AstrMessageEvent, message: list) -> bool:
         """Send a raw OneBot message to the conversation, returning success.
@@ -273,7 +287,7 @@ class QmessageQToolbox(Star):
         Usage: ``/himg <text>`` with an attached image (including a quoted
         image), or ``/himg <text> <image_url>``.
         """
-        if not self._check_permission(event):
+        if not self._check_permission(event, "himg_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
             return
 
@@ -351,7 +365,7 @@ class QmessageQToolbox(Star):
         cannot display custom avatar URLs.
         An attached image is forwarded as sent by the first forged user.
         """
-        if not self._check_permission(event):
+        if not self._check_permission(event, "fake_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
             return
         if not uin.isdigit():
@@ -448,7 +462,7 @@ class QmessageQToolbox(Star):
         exact group nickname/card, ``all`` for @everyone, or ``random [count]``
         to @ a few random members.
         """
-        if not self._check_at_permission(event):
+        if not self._check_permission(event, "at_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
             return
 
@@ -513,13 +527,15 @@ class QmessageQToolbox(Star):
         a raw numeric id (``14``) or a ``#``-prefixed numeric id. Append
         ``cancel`` to remove the reaction, ``big`` to send a big emoji.
 
+        NapCat uses ``set_msg_emoji_like``; other OneBot implementations that
+        only provide ``set_msg_reaction`` are handled automatically.
+
         Examples:
             ``/face 微笑`` reacts with the smiling face.
             ``/face 😀`` reacts with the same smile.
             ``/face 爱心 cancel`` removes the bot's heart reaction.
-            ``/face cancel`` removes all of the bot's reactions on the message.
         """
-        if not self._check_face_permission(event):
+        if not self._check_permission(event, "face_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
             return
         reply = next(
@@ -538,32 +554,74 @@ class QmessageQToolbox(Star):
                 "Missing face: run `/face <表情>` while replying to a message.",
             )
             return
-        cancel = tokens[0] == "cancel" or "cancel" in tokens[1:]
-        face_id = None
-        if tokens[0] != "cancel":
-            face_id = resolve_face_id(tokens[0])
-            if face_id is None:
-                yield event.plain_result(
-                    f"Unknown face '{tokens[0]}': use a face name, an English "
-                    "alias, an emoji or a numeric id.",
-                )
-                return
-
-        try:
-            await event.bot.call_action(
-                "set_msg_reaction",
-                message_id=int(reply.id),
-                code=str(face_id) if face_id is not None else None,
-                is_cancel=cancel,
-                is_big="big" in tokens,
-            )
-        except Exception as exc:
-            logger.error("face: failed to set the reaction: %s", exc)
+        head = tokens[0]
+        if head in ("cancel", "big"):
             yield event.plain_result(
-                "Failed to set the reaction (NapCat may not support this action).",
+                f"Missing face: specify the emoji first, e.g. `/face 爱心 {head}`.",
+            )
+            return
+        face_id = resolve_face_id(head)
+        if face_id is None:
+            yield event.plain_result(
+                f"Unknown face '{head}': use a face name, an English alias, "
+                "an emoji or a numeric id.",
+            )
+            return
+
+        used = await self._apply_reaction(
+            event,
+            message_id=int(reply.id),
+            emoji=str(face_id),
+            set_=not ("cancel" in tokens),
+            is_big="big" in tokens,
+        )
+        if used is None:
+            yield event.plain_result(
+                "Failed to set the reaction: the protocol client does not "
+                "support any reaction API.",
             )
             return
         event.should_call_llm(True)
+
+    async def _apply_reaction(
+        self,
+        event: AstrMessageEvent,
+        message_id: int,
+        emoji: str,
+        set_: bool,
+        is_big: bool,
+    ) -> str | None:
+        """Set or clear a message reaction, returning the used action name.
+
+        Tries NapCat's ``set_msg_emoji_like`` first, then falls back to the
+        OneBot extended ``set_msg_reaction`` when the primary action is
+        unsupported.
+
+        Returns:
+            The action name used, or ``None`` when every attempt failed.
+        """
+        for action in ("set_msg_emoji_like", "set_msg_reaction"):
+            if action == "set_msg_emoji_like":
+                payload: dict[str, Any] = {
+                    "message_id": message_id,
+                    "emoji_id": emoji,
+                    "set": set_,
+                }
+            else:
+                payload = {
+                    "message_id": message_id,
+                    "code": emoji,
+                    "is_cancel": not set_,
+                    "is_big": is_big,
+                }
+            try:
+                await event.bot.call_action(action, **payload)
+                return action
+            except Exception as exc:
+                logger.warning("face: %s failed: %s", action, exc)
+                if not is_unsupported_api_error(exc):
+                    return None
+        return None
 
     @filter.command("card")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
@@ -574,7 +632,7 @@ class QmessageQToolbox(Star):
         ``/card group <群号>`` sends the group's card. NapCat builds the card
         from the real contact's profile, so the ID must exist.
         """
-        if not self._check_permission(event):
+        if not self._check_permission(event, "card_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
             return
         kind = contact_type.lower()
@@ -606,7 +664,7 @@ class QmessageQToolbox(Star):
                 group chats.
             at_all(boolean): When true, @everyone is used and target is ignored.
         """
-        if not self._check_permission(event):
+        if not self._check_permission(event, "at_user_admin_only"):
             return "Permission denied: at_user is restricted to admins."
         if at_all or target.strip().lower() == "all":
             if not event.get_group_id():

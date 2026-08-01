@@ -1,20 +1,44 @@
 {
   "admin_only": {
-    "description": "命令仅管理员可用",
+    "description": "全局默认：命令仅管理员可用",
     "type": "bool",
-    "hint": "开启后，所有命令（himg、fake、at）仅对管理员生效；关闭后所有成员可用。",
+    "hint": "全局兜底开关，作为各命令未单独配置时的默认值；各命令可用下方的 <命令名>_admin_only 单独覆盖。",
+    "default": true
+  },
+  "himg_admin_only": {
+    "description": "himg 命令仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，himg 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
+    "default": true
+  },
+  "fake_admin_only": {
+    "description": "fake 命令仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，fake 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
     "default": true
   },
   "at_admin_only": {
     "description": "at 命令仅管理员可用",
     "type": "bool",
-    "hint": "开启后，at 命令仅对管理员生效，独立于 admin_only；关闭后所有成员可用。",
+    "hint": "开启后，at 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
+    "default": true
+  },
+  "card_admin_only": {
+    "description": "card 命令仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，card 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
     "default": true
   },
   "face_admin_only": {
     "description": "face 命令仅管理员可用",
     "type": "bool",
-    "hint": "开启后，face 命令仅对管理员生效，独立于 admin_only；关闭后所有成员可用。",
+    "hint": "开启后，face 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
+    "default": true
+  },
+  "at_user_admin_only": {
+    "description": "at_user 工具仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，LLM at_user 工具仅对管理员生效；未设置时使用 admin_only 的默认值。",
     "default": true
   }
 }
