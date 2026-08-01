@@ -237,6 +237,28 @@ class QmessageQToolbox(Star):
         restricted = self.config.get(key, self.config.get("admin_only", True))
         return not restricted or event.is_admin()
 
+    def _conversation_target(
+        self, event: AstrMessageEvent
+    ) -> tuple[bool, int, dict[str, Any]] | None:
+        """Resolve the send target as ``(is_group, target_id, routing)``.
+
+        Args:
+            event: The message event; the target is its group or sender.
+
+        Returns:
+            ``(is_group, target_id, routing)`` where ``routing`` may carry
+            ``self_id``, or ``None`` when the target cannot be resolved.
+        """
+        is_group = bool(event.get_group_id())
+        target = event.get_group_id() if is_group else event.get_sender_id()
+        if not target or not target.isdigit():
+            return None
+        routing: dict[str, Any] = {}
+        self_id = getattr(event.message_obj, "self_id", None)
+        if self_id:
+            routing["self_id"] = self_id
+        return is_group, int(target), routing
+
     async def _send_direct(self, event: AstrMessageEvent, message: list) -> bool:
         """Send a raw OneBot message to the conversation, returning success.
 
@@ -244,22 +266,18 @@ class QmessageQToolbox(Star):
             event: The message event; the target is its group or sender.
             message: OneBot message segment list.
         """
-        is_group = bool(event.get_group_id())
-        target = event.get_group_id() if is_group else event.get_sender_id()
-        if not target or not target.isdigit():
+        target_info = self._conversation_target(event)
+        if target_info is None:
             return False
-        routing: dict[str, Any] = {}
-        self_id = getattr(event.message_obj, "self_id", None)
-        if self_id:
-            routing["self_id"] = self_id
+        is_group, target, routing = target_info
         try:
             if is_group:
                 await event.bot.send_group_msg(
-                    group_id=int(target), message=message, **routing
+                    group_id=target, message=message, **routing
                 )
             else:
                 await event.bot.send_private_msg(
-                    user_id=int(target), message=message, **routing
+                    user_id=target, message=message, **routing
                 )
         except Exception as exc:
             logger.error("direct send failed: %s", exc)
@@ -318,27 +336,22 @@ class QmessageQToolbox(Star):
         else:
             file = url
 
-        is_group = bool(event.get_group_id())
-        target = event.get_group_id() if is_group else event.get_sender_id()
-        if not target or not target.isdigit():
+        target_info = self._conversation_target(event)
+        if target_info is None:
             yield event.plain_result("Failed to resolve the conversation target.")
             return
-
-        routing: dict[str, Any] = {}
-        self_id = getattr(event.message_obj, "self_id", None)
-        if self_id:
-            routing["self_id"] = self_id
+        is_group, target, routing = target_info
         message = build_image_summary_message(file, text.strip())
         try:
             if is_group:
                 await event.bot.send_group_msg(
-                    group_id=int(target),
+                    group_id=target,
                     message=message,
                     **routing,
                 )
             else:
                 await event.bot.send_private_msg(
-                    user_id=int(target),
+                    user_id=target,
                     message=message,
                     **routing,
                 )
@@ -426,27 +439,25 @@ class QmessageQToolbox(Star):
                 return
             nodes.append(Node(content=node_content, name=n_name, uin=n_uin_eff))
 
-        is_group = bool(event.get_group_id())
-        target = event.get_group_id() if is_group else event.get_sender_id()
-        if not target or not target.isdigit():
+        target_info = self._conversation_target(event)
+        if target_info is None:
             yield event.plain_result("Failed to resolve the conversation target.")
             return
+        is_group, target, routing = target_info
 
         payload: dict[str, Any] = {"messages": []}
         for node in nodes:
             payload["messages"].append(await node.to_dict())
         if is_group:
-            payload["group_id"] = int(target)
+            payload["group_id"] = target
         else:
-            payload["user_id"] = int(target)
-        self_id = getattr(event.message_obj, "self_id", None)
-        if self_id:
-            payload["self_id"] = self_id
+            payload["user_id"] = target
+        payload.update(routing)
         try:
-            if is_group:
-                await event.bot.call_action("send_group_forward_msg", **payload)
-            else:
-                await event.bot.call_action("send_private_forward_msg", **payload)
+            await event.bot.call_action(
+                "send_group_forward_msg" if is_group else "send_private_forward_msg",
+                **payload,
+            )
         except Exception as exc:
             logger.error("fake: failed to send the forward message: %s", exc)
             yield event.plain_result("Failed to send the forward message.")
@@ -636,13 +647,11 @@ class QmessageQToolbox(Star):
             yield event.plain_result("Permission denied: this command is admin-only.")
             return
         kind = contact_type.lower()
-        if kind in ("qq", "user", "friend"):
-            kind = "qq"
-        elif kind == "group":
-            pass
-        else:
+        if kind not in ("qq", "user", "friend", "group"):
             yield event.plain_result("Invalid card type: use `qq` or `group`.")
             return
+        if kind in ("user", "friend"):
+            kind = "qq"
         if not contact_id.isdigit():
             yield event.plain_result("Invalid contact id.")
             return
