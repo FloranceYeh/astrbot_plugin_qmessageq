@@ -821,6 +821,8 @@ class QmessageQToolbox(Star):
     @classmethod
     def _format_segments(cls, segments: list) -> str:
         """Compact single-line rendering of OneBot segments."""
+        if isinstance(segments, str):
+            return segments
         parts = []
         for seg in segments or []:
             if not isinstance(seg, dict):
@@ -989,9 +991,27 @@ class QmessageQToolbox(Star):
                 if not isinstance(node, dict):
                     continue
                 data = node.get("data") or {}
-                nickname = data.get("nickname") or "?"
-                uid = data.get("user_id") or "?"
-                content = data.get("content") or data.get("message") or []
+                sender = node.get("sender") or {}
+                nickname = (
+                    data.get("nickname")
+                    or data.get("name")
+                    or sender.get("nickname")
+                    or node.get("nickname")
+                    or "?"
+                )
+                uid = (
+                    data.get("user_id")
+                    or data.get("uin")
+                    or node.get("user_id")
+                    or "?"
+                )
+                content = (
+                    data.get("content")
+                    or data.get("message")
+                    or node.get("message")
+                    or node.get("content")
+                    or []
+                )
                 forward_lines.append(
                     f"[{i}] {nickname}({uid}): {self._format_segments(content)}"
                 )
