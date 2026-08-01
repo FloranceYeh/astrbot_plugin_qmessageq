@@ -15,6 +15,7 @@ from astrbot.core.star.filter.command import GreedyStr
 from .faces import emoji_codepoint, hidden_faces, is_emoji_text, resolve_face_ids
 
 _HFACE_LIST_LIMIT = 20
+_FACE_REPEAT_LIMIT = 100
 
 
 def build_image_summary_message(file: str, summary: str) -> list[dict]:
@@ -470,15 +471,16 @@ class QmessageQToolbox(Star):
 
         Usage: reply to a message, then run ``/face <表情>``. ``<表情>`` can be
         a face name (``微笑``), an English alias (``smile``), a numeric id
-        (``14``), a ``#``-prefixed numeric id, a numeric range ``a-b``, or an
-        emoji. An emoji reacts with the literal emoji itself; a name/number
+        (``14``), a ``#``-prefixed numeric id, a numeric range ``a-b``, an
+        emoji, or a repeat ``NxM`` (e.g. ``1x50`` reacts with face 1 fifty
+        times). An emoji reacts with the literal emoji itself; a name/number
         reacts with the matching QQ face. Append ``cancel`` to remove the
         reaction, ``big`` to send a big emoji.
 
-        A range is reacted to one by one, spaced by the configurable
+        A range or repeat is reacted to one by one, spaced by the configurable
         ``face_interval``; the bot first reports the expected duration and
         afterwards a summary when any reaction failed. Run ``/face stop``
-        during a range to abort it early.
+        during a run to abort it early.
 
         NapCat uses ``set_msg_emoji_like``; other OneBot implementations that
         only provide ``set_msg_reaction`` are handled automatically.
@@ -487,6 +489,7 @@ class QmessageQToolbox(Star):
             ``/face 微笑`` reacts with the smiling QQ face.
             ``/face 💢`` reacts with the literal 💢 emoji.
             ``/face 66-70`` reacts with faces 66 to 70, one per interval.
+            ``/face 1x50`` reacts with face 1 fifty times.
             ``/face stop`` aborts a running range.
             ``/face 爱心 cancel`` removes the bot's heart reaction.
         """
@@ -521,35 +524,40 @@ class QmessageQToolbox(Star):
                 f"Missing face: specify the emoji first, e.g. `/face 爱心 {head}`.",
             )
             return
-        if is_emoji_text(head):
-            used = await self._apply_reaction(
-                event,
-                message_id=int(reply.id),
-                emoji=str(emoji_codepoint(head)),
-                set_=not cancel,
-                is_big=is_big,
-            )
-            if used is None:
+        match = re.match(r"^(.*)x(\d+)$", head, re.IGNORECASE)
+        if match:
+            base, count = match.group(1), max(int(match.group(2)), 1)
+            if count > _FACE_REPEAT_LIMIT:
                 yield event.plain_result(
-                    "Failed to react with the literal emoji: the protocol "
-                    "client does not support it.",
+                    f"Too many repeats: at most {_FACE_REPEAT_LIMIT}.",
                 )
                 return
-            event.should_call_llm(True)
-            return
-        face_ids = resolve_face_ids(head)
-        if not face_ids:
-            yield event.plain_result(
-                f"Unknown face '{head}': use a face name, an English alias, "
-                "a numeric id or a range `a-b`.",
-            )
-            return
+        else:
+            base, count = head, 1
+        if is_emoji_text(base):
+            codepoint = emoji_codepoint(base)
+            if codepoint is None:
+                yield event.plain_result(
+                    "Unknown face: use a face name, an English alias, a numeric "
+                    "id, a range `a-b` or a repeat `NxM`.",
+                )
+                return
+            plan = [str(codepoint)] * count
+        else:
+            face_ids = resolve_face_ids(base)
+            if not face_ids:
+                yield event.plain_result(
+                    f"Unknown face '{head}': use a face name, an English alias, "
+                    "a numeric id, a range `a-b` or a repeat `NxM`.",
+                )
+                return
+            plan = [str(face_id) for face_id in face_ids] * count
 
-        if len(face_ids) == 1:
+        if len(plan) == 1:
             used = await self._apply_reaction(
                 event,
                 message_id=int(reply.id),
-                emoji=str(face_ids[0]),
+                emoji=plan[0],
                 set_=not cancel,
                 is_big=is_big,
             )
@@ -566,8 +574,8 @@ class QmessageQToolbox(Star):
         await self._send_direct(
             event,
             [{"type": "text", "data": {"text": (
-                f"将依次回应 {len(face_ids)} 个表情，每个间隔 {interval:g} 秒，"
-                f"预计约 {len(face_ids) * interval:g} 秒完成。"
+                f"将依次回应 {len(plan)} 个表情，每个间隔 {interval:g} 秒，"
+                f"预计约 {len(plan) * interval:g} 秒完成。"
                 "可用 `/face stop` 中止。"
             )}}],
         )
@@ -576,22 +584,22 @@ class QmessageQToolbox(Star):
         failures = []
         done = 0
         aborted = False
-        for idx, face_id in enumerate(face_ids):
+        for idx, emoji in enumerate(plan):
             if key in self._face_stop:
                 aborted = True
                 break
             used = await self._apply_reaction(
                 event,
                 message_id=int(reply.id),
-                emoji=str(face_id),
+                emoji=emoji,
                 set_=not cancel,
                 is_big=is_big,
             )
             if used is None:
-                failures.append(face_id)
+                failures.append(emoji)
             else:
                 done += 1
-            if idx < len(face_ids) - 1 and interval > 0:
+            if idx < len(plan) - 1 and interval > 0:
                 await self._sleep_interruptible(interval, key)
         self._face_stop.discard(key)
         if aborted:
@@ -604,7 +612,7 @@ class QmessageQToolbox(Star):
                 event,
                 [{"type": "text", "data": {"text": (
                     f"有 {len(failures)} 个表情回应失败："
-                    + " ".join(str(f) for f in failures)
+                    + " ".join(failures)
                 )}}],
             )
         event.should_call_llm(True)
