@@ -139,6 +139,20 @@ class QmessageQToolbox(Star):
     def __init__(self, context: Context, config: dict | None = None) -> None:
         super().__init__(context)
         self.config = config if config is not None else {}
+        self._face_stop: set[str] = set()
+
+    def _face_key(self, event: AstrMessageEvent) -> str:
+        """A per-conversation key used to scope ``face stop`` signals."""
+        is_group = bool(event.get_group_id())
+        target = event.get_group_id() if is_group else event.get_sender_id()
+        return f"{'g' if is_group else 'p'}:{target}"
+
+    async def _sleep_interruptible(self, seconds: float, key: str) -> None:
+        """Sleep, returning early when a stop request for ``key`` is set."""
+        while seconds > 0 and key not in self._face_stop:
+            step = min(0.2, seconds)
+            await asyncio.sleep(step)
+            seconds -= step
 
     def _check_permission(self, event: AstrMessageEvent, key: str) -> bool:
         """Whether the event sender may use a command.
@@ -463,7 +477,8 @@ class QmessageQToolbox(Star):
 
         A range is reacted to one by one, spaced by the configurable
         ``face_interval``; the bot first reports the expected duration and
-        afterwards a summary when any reaction failed.
+        afterwards a summary when any reaction failed. Run ``/face stop``
+        during a range to abort it early.
 
         NapCat uses ``set_msg_emoji_like``; other OneBot implementations that
         only provide ``set_msg_reaction`` are handled automatically.
@@ -472,10 +487,22 @@ class QmessageQToolbox(Star):
             ``/face 微笑`` reacts with the smiling QQ face.
             ``/face 💢`` reacts with the literal 💢 emoji.
             ``/face 66-70`` reacts with faces 66 to 70, one per interval.
+            ``/face stop`` aborts a running range.
             ``/face 爱心 cancel`` removes the bot's heart reaction.
         """
         if not self._check_permission(event, "face_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
+            return
+        tokens = [tok for tok in re.split(r"\s+", expr.strip()) if tok]
+        if not tokens:
+            yield event.plain_result(
+                "Missing face: run `/face <表情>` while replying to a message.",
+            )
+            return
+        if tokens[0] == "stop":
+            self._face_stop.add(self._face_key(event))
+            yield event.plain_result("已发送停止指令，范围回应将尽快中止。")
+            event.should_call_llm(True)
             return
         reply = next(
             (seg for seg in event.get_messages() if isinstance(seg, Comp.Reply)),
@@ -484,13 +511,6 @@ class QmessageQToolbox(Star):
         if reply is None:
             yield event.plain_result(
                 "Missing quoted message: reply to a message first.",
-            )
-            return
-
-        tokens = [tok for tok in re.split(r"\s+", expr.strip()) if tok]
-        if not tokens:
-            yield event.plain_result(
-                "Missing face: run `/face <表情>` while replying to a message.",
             )
             return
         cancel = "cancel" in tokens
@@ -548,10 +568,18 @@ class QmessageQToolbox(Star):
             [{"type": "text", "data": {"text": (
                 f"将依次回应 {len(face_ids)} 个表情，每个间隔 {interval:g} 秒，"
                 f"预计约 {len(face_ids) * interval:g} 秒完成。"
+                "可用 `/face stop` 中止。"
             )}}],
         )
+        key = self._face_key(event)
+        self._face_stop.discard(key)
         failures = []
+        done = 0
+        aborted = False
         for idx, face_id in enumerate(face_ids):
+            if key in self._face_stop:
+                aborted = True
+                break
             used = await self._apply_reaction(
                 event,
                 message_id=int(reply.id),
@@ -561,9 +589,17 @@ class QmessageQToolbox(Star):
             )
             if used is None:
                 failures.append(face_id)
+            else:
+                done += 1
             if idx < len(face_ids) - 1 and interval > 0:
-                await asyncio.sleep(interval)
-        if failures:
+                await self._sleep_interruptible(interval, key)
+        self._face_stop.discard(key)
+        if aborted:
+            await self._send_direct(
+                event,
+                [{"type": "text", "data": {"text": f"已中止范围回应，已完成 {done} 个。"}}],
+            )
+        elif failures:
             await self._send_direct(
                 event,
                 [{"type": "text", "data": {"text": (
