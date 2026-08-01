@@ -87,6 +87,99 @@ def split_avatar_marker(text: str) -> tuple[str, str]:
     return text, ""
 
 
+_FACE_ID_BY_NAME: dict[str, int] = {
+    "惊讶": 0, "撇嘴": 1, "色": 2, "发呆": 3, "得意": 4, "流泪": 5, "害羞": 6,
+    "闭嘴": 7, "睡": 8, "大哭": 9, "尴尬": 10, "发怒": 11, "调皮": 12, "呲牙": 13,
+    "微笑": 14, "难过": 15, "酷": 16, "抓狂": 17, "吐": 18, "偷笑": 19, "可爱": 20,
+    "白眼": 21, "傲慢": 22, "饥饿": 23, "困": 24, "惊恐": 25, "流汗": 26, "憨笑": 27,
+    "悠闲": 28, "奋斗": 29, "咒骂": 30, "疑问": 31, "嘘": 32, "晕": 33, "折磨": 34,
+    "衰": 35, "骷髅": 36, "敲打": 37, "再见": 38, "擦汗": 39, "抠鼻": 40, "鼓掌": 41,
+    "糗大了": 42, "坏笑": 43, "左哼哼": 44, "右哼哼": 45, "哈欠": 46, "鄙视": 47,
+    "委屈": 48, "快哭了": 49, "阴险": 50, "亲亲": 51, "吓": 52, "可怜": 53,
+    "菜刀": 54, "西瓜": 55, "啤酒": 56, "篮球": 57, "乒乓": 58, "咖啡": 59, "饭": 60,
+    "猪头": 61, "玫瑰": 62, "凋谢": 63, "嘴唇": 64, "爱心": 65, "心碎": 66, "蛋糕": 67,
+    "闪电": 68, "炸弹": 69, "刀": 70, "足球": 71, "瓢虫": 72, "便便": 73, "月亮": 74,
+    "太阳": 75, "礼物": 76, "拥抱": 77, "强": 78, "弱": 79, "握手": 80, "胜利": 81,
+    "抱拳": 82, "勾引": 83, "拳头": 84, "差劲": 85, "爱你": 86, "NO": 87, "OK": 88,
+    "爱情": 89, "飞吻": 90, "跳跳": 91, "发抖": 92, "怄火": 93, "转圈": 94, "磕头": 95,
+    "回头": 96, "跳绳": 97, "挥手": 98, "激动": 99, "街舞": 100, "献吻": 101,
+    "左太极": 102, "右太极": 103,
+}
+
+_FACE_ALIASES: dict[str, int] = {
+    "smile": 14, "happy": 14, "sad": 15, "cry": 9, "angry": 11, "love": 65,
+    "heart": 65, "broken_heart": 66, "ok": 88, "no": 87, "strong": 78,
+    "weak": 79, "clap": 41, "wave": 98, "sleep": 8, "kiss": 51, "rose": 62,
+}
+
+_FACE_EMOJI_MAP: dict[str, int] = {
+    "😀": 14, "😃": 14, "😄": 14, "😁": 14, "😆": 14, "😊": 14, "🙂": 14,
+    "☺": 14, "😉": 14, "😜": 43, "😝": 43, "🤪": 43, "😏": 43, "😛": 43,
+    "😎": 16, "🤓": 16, "😂": 13, "🤣": 13, "😅": 39, "😓": 26, "😥": 26,
+    "😰": 39, "😢": 5, "😭": 9, "🥺": 53, "😔": 15, "🙁": 15, "☹": 15,
+    "😞": 15, "😕": 15, "😐": 10, "😑": 10, "😶": 10, "😠": 11, "😡": 11,
+    "😤": 30, "😳": 25, "😱": 25, "😨": 25, "🤔": 31, "🧐": 31, "😴": 8,
+    "💤": 8, "😋": 53, "🤤": 53, "🥰": 65, "😍": 65, "🤩": 65, "😘": 90,
+    "😙": 51, "😚": 51, "😗": 51, "😇": 20, "🤗": 77, "😈": 50, "👿": 11,
+    "🤮": 18, "😵": 33, "🤯": 25, "💢": 11, "💦": 26, "💧": 26, "👍": 78,
+    "👌": 78, "✅": 78, "🙆": 78, "👎": 79, "🙅": 79, "❌": 79, "👏": 41,
+    "🙌": 41, "🙏": 82, "✌": 81, "🤞": 81, "👊": 84, "🤝": 80, "💪": 78,
+    "❤": 65, "🧡": 65, "💛": 65, "💚": 65, "💙": 65, "💜": 65, "🖤": 65,
+    "🤍": 65, "🤎": 65, "💗": 65, "💓": 65, "💕": 65, "💞": 65, "💖": 65,
+    "💝": 65, "💔": 66, "💘": 65, "💋": 64, "👄": 64, "🎉": 41, "🎊": 41,
+    "🥳": 41, "🌹": 62, "🌷": 62, "🌻": 62, "🌸": 62, "🌺": 62, "💐": 62,
+    "🎂": 67, "🍰": 67, "💣": 69, "💩": 73, "🍉": 55, "🍺": 56, "🏀": 57,
+    "🏓": 58, "☕": 59, "🍚": 60, "🐷": 61, "⚡": 68, "🔪": 70, "⚽": 71,
+    "🐞": 72, "🌙": 74, "☀": 75, "🎁": 76, "💀": 36, "🔥": 93, "👀": 25,
+    "🙈": 50, "🙉": 50, "🙊": 50,
+}
+
+_VS16 = "\ufe0f"
+_ZWJ_CHAR = "\u200d"
+_SKIN_TONE_CHARS = frozenset(
+    "\U0001f3fb\U0001f3fc\U0001f3fd\U0001f3fe\U0001f3ff"
+)
+
+
+def normalize_emoji_token(token: str) -> str:
+    """Strip variation selectors, ZWJ and skin-tone modifiers from an emoji.
+
+    Args:
+        token: A raw emoji string, e.g. ``"❤️"``, ``"👍🏿"`` or ``"❤🔥"``.
+
+    Returns:
+        The normalized emoji, e.g. ``"❤"``, ``"👍"`` or ``"❤🔥"``.
+    """
+    token = token.replace(_VS16, "").replace(_ZWJ_CHAR, "")
+    return "".join(ch for ch in token if ch not in _SKIN_TONE_CHARS)
+
+
+def resolve_face_id(token: str) -> int | None:
+    """Resolve a face token to a QQ face id, or ``None`` when unknown.
+
+    Args:
+        token: A face name (``微笑``), an English alias (``smile``), an emoji
+            (``😀``), a raw numeric id (``14``) or a ``#``-prefixed numeric id
+            (``#14``).
+
+    Returns:
+        The QQ face id as an ``int``, or ``None`` when nothing matches.
+    """
+    token = normalize_emoji_token(token.strip())
+    if token.startswith("#"):
+        token = token[1:]
+    if token.isdigit():
+        return int(token)
+    face_id = _FACE_ID_BY_NAME.get(token)
+    if face_id is None:
+        face_id = _FACE_ALIASES.get(token.lower())
+    if face_id is None:
+        face_id = _FACE_EMOJI_MAP.get(token)
+    if face_id is None and len(token) > 1:
+        face_id = _FACE_EMOJI_MAP.get(token[0])
+    return face_id
+
+
 def effective_node_qq(uin: str, avatar_marker: str) -> str | None:
     """The node's effective QQ after an ``头像=/ava=`` override.
 
@@ -109,8 +202,9 @@ class QmessageQToolbox(Star):
     """Multi-function QQ message toolbox for aiocqhttp (NapCat/OneBot).
 
     Provides image summary steganography (``himg``), forged forward messages
-    (``fake``), real ``@`` mentions (``at``), contact cards (``card``) and an
-    LLM ``at_user`` tool that prepends an ``@`` to the bot's reply.
+    (``fake``), real ``@`` mentions (``at``), contact cards (``card``), quoted
+    message reactions (``face``) and an LLM ``at_user`` tool that prepends an
+    ``@`` to the bot's reply.
     """
 
     def __init__(self, context: Context, config: dict | None = None) -> None:
@@ -124,6 +218,10 @@ class QmessageQToolbox(Star):
     def _check_at_permission(self, event: AstrMessageEvent) -> bool:
         """Whether the event sender is allowed to use the admin-only at command."""
         return not self.config.get("at_admin_only", True) or event.is_admin()
+
+    def _check_face_permission(self, event: AstrMessageEvent) -> bool:
+        """Whether the event sender is allowed to use the admin-only face command."""
+        return not self.config.get("face_admin_only", True) or event.is_admin()
 
     async def _send_direct(self, event: AstrMessageEvent, message: list) -> bool:
         """Send a raw OneBot message to the conversation, returning success.
@@ -404,6 +502,68 @@ class QmessageQToolbox(Star):
         if text.strip():
             chain.append(Comp.Plain(text))
         yield event.chain_result(chain)
+
+    @filter.command("face")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def face(self, event: AstrMessageEvent, expr: GreedyStr):
+        """React to a quoted message with a specified QQ face.
+
+        Usage: reply to a message, then run ``/face <表情>``. ``<表情>`` can be
+        a face name (``微笑``), an English alias (``smile``), an emoji (``😀``),
+        a raw numeric id (``14``) or a ``#``-prefixed numeric id. Append
+        ``cancel`` to remove the reaction, ``big`` to send a big emoji.
+
+        Examples:
+            ``/face 微笑`` reacts with the smiling face.
+            ``/face 😀`` reacts with the same smile.
+            ``/face 爱心 cancel`` removes the bot's heart reaction.
+            ``/face cancel`` removes all of the bot's reactions on the message.
+        """
+        if not self._check_face_permission(event):
+            yield event.plain_result("Permission denied: this command is admin-only.")
+            return
+        reply = next(
+            (seg for seg in event.get_messages() if isinstance(seg, Comp.Reply)),
+            None,
+        )
+        if reply is None:
+            yield event.plain_result(
+                "Missing quoted message: reply to a message first.",
+            )
+            return
+
+        tokens = [tok for tok in re.split(r"\s+", expr.strip()) if tok]
+        if not tokens:
+            yield event.plain_result(
+                "Missing face: run `/face <表情>` while replying to a message.",
+            )
+            return
+        cancel = tokens[0] == "cancel" or "cancel" in tokens[1:]
+        face_id = None
+        if tokens[0] != "cancel":
+            face_id = resolve_face_id(tokens[0])
+            if face_id is None:
+                yield event.plain_result(
+                    f"Unknown face '{tokens[0]}': use a face name, an English "
+                    "alias, an emoji or a numeric id.",
+                )
+                return
+
+        try:
+            await event.bot.call_action(
+                "set_msg_reaction",
+                message_id=int(reply.id),
+                code=str(face_id) if face_id is not None else None,
+                is_cancel=cancel,
+                is_big="big" in tokens,
+            )
+        except Exception as exc:
+            logger.error("face: failed to set the reaction: %s", exc)
+            yield event.plain_result(
+                "Failed to set the reaction (NapCat may not support this action).",
+            )
+            return
+        event.should_call_llm(True)
 
     @filter.command("card")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)

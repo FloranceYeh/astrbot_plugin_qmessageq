@@ -10,5 +10,11 @@
     "type": "bool",
     "hint": "开启后，at 命令仅对管理员生效，独立于 admin_only；关闭后所有成员可用。",
     "default": true
+  },
+  "face_admin_only": {
+    "description": "face 命令仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，face 命令仅对管理员生效，独立于 admin_only；关闭后所有成员可用。",
+    "default": true
   }
 }
