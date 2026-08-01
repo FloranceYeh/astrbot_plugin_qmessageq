@@ -18,6 +18,7 @@ from .faces import emoji_codepoint, hidden_faces, is_emoji_text, resolve_face_id
 
 _HFACE_LIST_LIMIT = 20
 _FACE_REPEAT_LIMIT = 100
+_MAGIC_RE = re.compile(r"<\$[^>]*>")
 
 
 def build_image_summary_message(file: str, summary: str) -> list[dict]:
@@ -1071,6 +1072,44 @@ class QmessageQToolbox(Star):
             yield event.plain_result("Failed to send the parse result.")
             return
         event.should_call_llm(True)
+
+    @filter.command("magic")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def magic(self, event: AstrMessageEvent, expr: GreedyStr):
+        """Output QQ magic-expression (魔法表情) templates.
+
+        QQ renders ``<$...>`` templates embedded in text as magic emoji. Usage:
+        ``/magic <内容>`` sends the content literally so any such template
+        renders; or reply to a message containing magic expressions to
+        re-send just the extracted templates.
+        """
+        if not self._check_permission(event, "magic_admin_only"):
+            yield event.plain_result("Permission denied: this command is admin-only.")
+            return
+        reply = next(
+            (seg for seg in event.get_messages() if isinstance(seg, Comp.Reply)),
+            None,
+        )
+        if reply is not None and not expr.strip():
+            source = (reply.message_str or "") + "".join(
+                seg.text
+                for seg in reply.chain or []
+                if isinstance(seg, Comp.Plain)
+            )
+            templates = _MAGIC_RE.findall(source)
+            if not templates:
+                yield event.plain_result("引用的消息里没有魔法表情模板。")
+                return
+            yield event.chain_result([Comp.Plain("".join(templates))])
+            return
+        text = expr.strip()
+        if not text:
+            yield event.plain_result(
+                "Missing content: run `/magic <模板>`, or reply to a message "
+                "containing magic expressions.",
+            )
+            return
+        yield event.chain_result([Comp.Plain(text)])
 
     @filter.command("card")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)

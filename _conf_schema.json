@@ -53,6 +53,12 @@
     "hint": "开启后，parse 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
     "default": true
   },
+  "magic_admin_only": {
+    "description": "magic 命令仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，magic 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
+    "default": true
+  },
     "at_user_admin_only": {
     "description": "at_user 工具仅管理员可用",
     "type": "bool",
