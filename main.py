@@ -864,6 +864,84 @@ class QmessageQToolbox(Star):
                 parts.append(f"[{stype}]")
         return " ".join(parts)
 
+    def _collect_dict_segments(
+        self,
+        content_lines: list[str],
+        forward_ids: list[str],
+        segments: list,
+    ) -> None:
+        """Collect readable lines from OneBot dict segments."""
+        for seg in segments or []:
+            if not isinstance(seg, dict):
+                continue
+            stype = seg.get("type")
+            data = seg.get("data") or {}
+            if stype == "text":
+                text = str(data.get("text", ""))
+                if text.strip():
+                    content_lines.append(f"文本: {text}")
+            elif stype == "face":
+                content_lines.append(f"表情ID: {data.get('id')}")
+            elif stype == "image":
+                summary = data.get("summary")
+                url = data.get("url") or data.get("file") or ""
+                if summary:
+                    content_lines.append(f"图片summary: {summary}  url: {url}")
+                else:
+                    content_lines.append(f"图片: {url}")
+            elif stype == "at":
+                content_lines.append(
+                    f"@{data.get('qq') or data.get('name') or ''}"
+                )
+            elif stype == "json":
+                raw = data.get("data") or ""
+                resid = self._extract_forward_res_id(raw)
+                if resid:
+                    forward_ids.append(resid)
+                    content_lines.append(f"合并转发: res_id={resid}")
+                else:
+                    summary = self._json_card_summary(raw)
+                    content_lines.append(
+                        f"卡片: {summary}" if summary else "卡片"
+                    )
+            elif stype == "forward":
+                res_id = str(data.get("id"))
+                forward_ids.append(res_id)
+                content_lines.append(f"合并转发: res_id={res_id}")
+            else:
+                content_lines.append(f"[{stype}]")
+
+    def _collect_chain(
+        self,
+        content_lines: list[str],
+        forward_ids: list[str],
+        chain: list,
+    ) -> None:
+        """Collect readable lines from a Reply chain of components."""
+        for seg in chain or []:
+            if isinstance(seg, Comp.Plain):
+                if seg.text.strip():
+                    content_lines.append(f"文本: {seg.text}")
+            elif isinstance(seg, Comp.Face):
+                content_lines.append(f"表情ID: {seg.id}")
+            elif isinstance(seg, Comp.Image):
+                summary = getattr(seg, "summary", "") or ""
+                url = seg.url or seg.file or ""
+                if summary:
+                    content_lines.append(f"图片summary: {summary}  url: {url}")
+                else:
+                    content_lines.append(f"图片: {url}")
+            elif isinstance(seg, Comp.AtAll):
+                content_lines.append("@全体成员")
+            elif isinstance(seg, Comp.At):
+                content_lines.append(f"@{seg.qq}")
+            elif isinstance(seg, Comp.Forward):
+                res_id = str(seg.id)
+                forward_ids.append(res_id)
+                content_lines.append(f"合并转发: res_id={res_id}")
+            else:
+                content_lines.append(f"[{getattr(seg, 'type', '?')}]")
+
     @filter.command("parse")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
     async def parse(self, event: AstrMessageEvent):
@@ -872,7 +950,9 @@ class QmessageQToolbox(Star):
         Usage: reply to a message, then run ``/parse``. Sends a merge-forward
         message with one node per section: basic info, time, content (text /
         face ids / mentions), image summaries, emoji reactions and, for a
-        merge-forward message, its node list.
+        merge-forward message, its node list. Content is read from the reply's
+        own chain when the message can no longer be fetched (sender/time still
+        come from the reply itself).
         """
         if not self._check_permission(event, "parse_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
@@ -887,12 +967,11 @@ class QmessageQToolbox(Star):
             )
             return
         message_id = int(reply.id)
+        info = None
         try:
             info = await event.bot.call_action("get_msg", message_id=message_id)
         except Exception as exc:
             logger.warning("parse: get_msg failed: %s", exc)
-            yield event.plain_result(f"Failed to fetch the quoted message: {exc}")
-            return
 
         self_uin = str(getattr(event.message_obj, "self_id", None) or "10001")
         nodes: list = []
@@ -900,9 +979,15 @@ class QmessageQToolbox(Star):
         def section(label: str, text: str) -> None:
             nodes.append(Node(content=[Comp.Plain(text)], name=label, uin=self_uin))
 
-        sender = info.get("sender") or {}
-        sender_name = sender.get("card") or sender.get("nickname") or "?"
-        sender_qq = sender.get("user_id", "?")
+        if info:
+            sender = info.get("sender") or {}
+            sender_name = sender.get("card") or sender.get("nickname") or "?"
+            sender_qq = sender.get("user_id", "?")
+            ts = info.get("time")
+        else:
+            sender_name = reply.sender_nickname or "?"
+            sender_qq = reply.sender_id or "?"
+            ts = reply.time
         section(
             "基本信息",
             "\n".join(
@@ -912,7 +997,6 @@ class QmessageQToolbox(Star):
                 ]
             ),
         )
-        ts = info.get("time")
         if ts:
             section(
                 "时间",
@@ -921,53 +1005,15 @@ class QmessageQToolbox(Star):
 
         content_lines: list[str] = []
         forward_ids: list[str] = []
-        message = info.get("message")
-        if isinstance(message, str):
-            content_lines.append(f"原文: {message}")
+        message = info.get("message") if info else None
+        if isinstance(message, list):
+            self._collect_dict_segments(content_lines, forward_ids, message)
         else:
-            for seg in message or []:
-                if not isinstance(seg, dict):
-                    continue
-                stype = seg.get("type")
-                data = seg.get("data") or {}
-                if stype == "text":
-                    text = str(data.get("text", ""))
-                    if text.strip():
-                        content_lines.append(f"文本: {text}")
-                elif stype == "face":
-                    content_lines.append(f"表情ID: {data.get('id')}")
-                elif stype == "image":
-                    summary = data.get("summary")
-                    url = data.get("url") or data.get("file") or ""
-                    if summary:
-                        content_lines.append(f"图片summary: {summary}  url: {url}")
-                    else:
-                        content_lines.append(f"图片: {url}")
-                elif stype == "at":
-                    content_lines.append(
-                        f"@{data.get('qq') or data.get('name') or ''}"
-                    )
-                elif stype == "json":
-                    raw = data.get("data") or ""
-                    resid = self._extract_forward_res_id(raw)
-                    if resid:
-                        forward_ids.append(resid)
-                        content_lines.append(f"合并转发: res_id={resid}")
-                    else:
-                        summary = self._json_card_summary(raw)
-                        content_lines.append(
-                            f"卡片: {summary}" if summary else "卡片"
-                        )
-                elif stype == "forward":
-                    res_id = str(data.get("id"))
-                    forward_ids.append(res_id)
-                    content_lines.append(f"合并转发: res_id={res_id}")
-                else:
-                    content_lines.append(f"[{stype}]")
+            self._collect_chain(content_lines, forward_ids, reply.chain)
         if content_lines:
             section("内容", "\n".join(content_lines))
 
-        likes = info.get("emoji_likes_list")
+        likes = info.get("emoji_likes_list") if info else None
         if likes:
             section(
                 "回应",
