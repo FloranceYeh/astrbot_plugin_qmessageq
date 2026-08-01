@@ -23,6 +23,16 @@ _MAGIC_RE = re.compile(r"<\$[^>]*>")
 _MAGIC_CATALOG_FILE = "magic_templates.json"
 _MAGIC_LIST_LIMIT = 30
 
+
+def parse_byte_arg(text: str) -> int | None:
+    """Parse a byte argument as decimal or ``0x`` hex, ``1..0xFF``."""
+    text = text.strip().lower()
+    try:
+        value = int(text, 16) if text.startswith("0x") else int(text)
+    except ValueError:
+        return None
+    return value if 1 <= value <= 0xFF else None
+
 _MAGIC_EXPRESSIONS: list[tuple[str, str]] = [
     ("摇手手", "<$ÿĀ\x11\x10>"),
     ("四叶草🍀", "<$ÿĀB >"),
@@ -1147,11 +1157,14 @@ class QmessageQToolbox(Star):
         """Output QQ magic-expression (魔法表情) templates.
 
         QQ renders ``<$...>`` templates embedded in text as magic emoji. The
-        catalog is auto-learned from real messages (exact bytes, including
-        invisible characters). Usage: ``/magic list`` shows the catalog in a
-        forward message; ``/magic <编号>`` sends the matching entry; ``/magic
-        <模板>`` sends an arbitrary template and learns it; reply to a message
-        containing magic expressions to re-send and learn them.
+        catalog is seeded with known ones and auto-learns from real messages
+        (exact bytes). Usage: ``/magic <名称|编号>`` sends a known entry;
+        ``/magic c<ID>`` builds the single-char form ``<$chr(ID)>``; ``/magic
+        m <p1> <p2>`` / ``/magic m2 <p1> <p2>`` builds the multi-char forms
+        ``<$ÿĀ p1 p2>`` / ``<$ǿĀ p1 p2>`` (p1/p2 in decimal or ``0x`` hex);
+        ``/magic list`` shows the catalog; ``/magic <模板>`` sends an arbitrary
+        template; reply to a message containing magic expressions to re-send
+        and learn them.
         """
         if not self._check_permission(event, "magic_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
@@ -1199,6 +1212,25 @@ class QmessageQToolbox(Star):
                 self._learn_magic_templates([template])
                 yield event.chain_result([Comp.Plain(template)])
                 return
+        parts = arg.split()
+        if parts and parts[0] in ("m", "m1", "m2"):
+            base = 0x01FF if parts[0] == "m2" else 0x00FF
+            if len(parts) < 3:
+                yield event.plain_result(
+                    "用法：`/magic m <p1> <p2>`（基座 ÿ）或 `/magic m2 <p1> <p2>`（基座 ǿ）。",
+                )
+                return
+            p1 = parse_byte_arg(parts[1])
+            p2 = parse_byte_arg(parts[2])
+            if p1 is None or p2 is None:
+                yield event.plain_result(
+                    "无效参数：p1/p2 用十进制或 0x 十六进制，范围 1~255。",
+                )
+                return
+            template = f"<${chr(base)}\u0100{chr(p1)}{chr(p2)}>"
+            self._learn_magic_templates([template])
+            yield event.chain_result([Comp.Plain(template)])
+            return
         if _MAGIC_RE.search(arg):
             self._learn_magic_templates([arg])
             yield event.chain_result([Comp.Plain(arg)])
