@@ -809,9 +809,10 @@ class QmessageQToolbox(Star):
     async def parse(self, event: AstrMessageEvent):
         """Parse a quoted message: reactions, face ids, image summaries, forward details.
 
-        Usage: reply to a message, then run ``/parse``. Reports the message id,
-        sender, time, text, face ids, image summaries, emoji reactions and, for
-        a merge-forward message, its node list.
+        Usage: reply to a message, then run ``/parse``. Sends a merge-forward
+        message with one node per section: basic info, time, content (text /
+        face ids / mentions), image summaries, emoji reactions and, for a
+        merge-forward message, its node list.
         """
         if not self._check_permission(event, "parse_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
@@ -833,22 +834,36 @@ class QmessageQToolbox(Star):
             yield event.plain_result(f"Failed to fetch the quoted message: {exc}")
             return
 
-        lines: list[str] = [f"消息ID: {message_id}"]
+        self_uin = str(getattr(event.message_obj, "self_id", None) or "10001")
+        nodes: list = []
+
+        def section(label: str, text: str) -> None:
+            nodes.append(Node(content=[Comp.Plain(text)], name=label, uin=self_uin))
+
         sender = info.get("sender") or {}
         sender_name = sender.get("card") or sender.get("nickname") or "?"
         sender_qq = sender.get("user_id", "?")
-        lines.append(f"发送者: {sender_name} ({sender_qq})")
+        section(
+            "基本信息",
+            "\n".join(
+                [
+                    f"消息ID: {message_id}",
+                    f"发送者: {sender_name} ({sender_qq})",
+                ]
+            ),
+        )
         ts = info.get("time")
         if ts:
-            lines.append(
-                f"时间: {datetime.datetime.fromtimestamp(ts):%Y-%m-%d %H:%M:%S}"
+            section(
+                "时间",
+                f"{datetime.datetime.fromtimestamp(ts):%Y-%m-%d %H:%M:%S}",
             )
 
-        lines.append("内容:")
+        content_lines: list[str] = []
         forward_ids: list[str] = []
         message = info.get("message")
         if isinstance(message, str):
-            lines.append(f"  原文: {message}")
+            content_lines.append(f"原文: {message}")
         else:
             for seg in message or []:
                 if not isinstance(seg, dict):
@@ -858,58 +873,67 @@ class QmessageQToolbox(Star):
                 if stype == "text":
                     text = str(data.get("text", ""))
                     if text.strip():
-                        lines.append(f"  文本: {text}")
+                        content_lines.append(f"文本: {text}")
                 elif stype == "face":
-                    lines.append(f"  表情ID: {data.get('id')}")
+                    content_lines.append(f"表情ID: {data.get('id')}")
                 elif stype == "image":
                     summary = data.get("summary")
                     url = data.get("url") or data.get("file") or ""
                     if summary:
-                        lines.append(f"  图片summary: {summary}  url: {url}")
+                        content_lines.append(f"图片summary: {summary}  url: {url}")
                     else:
-                        lines.append(f"  图片: {url}")
+                        content_lines.append(f"图片: {url}")
                 elif stype == "at":
-                    lines.append(f"  @{data.get('qq') or data.get('name') or ''}")
+                    content_lines.append(
+                        f"@{data.get('qq') or data.get('name') or ''}"
+                    )
                 elif stype == "forward":
                     res_id = str(data.get("id"))
                     forward_ids.append(res_id)
-                    lines.append(f"  合并转发: res_id={res_id}")
+                    content_lines.append(f"合并转发: res_id={res_id}")
                 else:
-                    lines.append(f"  [{stype}]")
+                    content_lines.append(f"[{stype}]")
+        if content_lines:
+            section("内容", "\n".join(content_lines))
 
         likes = info.get("emoji_likes_list")
         if likes:
-            lines.append(f"回应 ({len(likes)}):")
-            for like in likes:
-                lines.append(
-                    f"  emoji_id={like.get('emoji_id')} "
+            section(
+                "回应",
+                "\n".join(
+                    f"emoji_id={like.get('emoji_id')} "
                     f"type={like.get('emoji_type')} x{like.get('likes_cnt')}"
-                )
+                    for like in likes
+                ),
+            )
 
         for res_id in forward_ids:
-            lines.append(f"转发内容 (res_id={res_id}):")
             try:
                 fwd = await event.bot.call_action("get_forward_msg", message_id=res_id)
             except Exception as exc:
                 logger.warning("parse: get_forward_msg failed: %s", exc)
-                lines.append("  获取失败（消息可能已过期）")
+                section("转发", "获取失败（消息可能已过期）")
                 continue
-            nodes = fwd.get("messages") or []
-            lines.append(f"  共 {len(nodes)} 条:")
-            for i, node in enumerate(nodes[:30]):
+            fwd_nodes = fwd.get("messages") or []
+            forward_lines = [f"共 {len(fwd_nodes)} 条 (res_id={res_id}):"]
+            for i, node in enumerate(fwd_nodes[:30]):
                 if not isinstance(node, dict):
                     continue
                 data = node.get("data") or {}
                 nickname = data.get("nickname") or "?"
                 uid = data.get("user_id") or "?"
                 content = data.get("content") or data.get("message") or []
-                lines.append(
-                    f"  [{i}] {nickname}({uid}): {self._format_segments(content)}"
+                forward_lines.append(
+                    f"[{i}] {nickname}({uid}): {self._format_segments(content)}"
                 )
-            if len(nodes) > 30:
-                lines.append(f"  ... 其余 {len(nodes) - 30} 条省略")
+            if len(fwd_nodes) > 30:
+                forward_lines.append(f"... 其余 {len(fwd_nodes) - 30} 条省略")
+            section("转发", "\n".join(forward_lines))
 
-        yield event.plain_result("\n".join(lines))
+        if not await self._send_forward_msg(event, nodes):
+            yield event.plain_result("Failed to send the parse result.")
+            return
+        event.should_call_llm(True)
 
     @filter.command("card")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
