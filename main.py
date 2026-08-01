@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import random
 import re
 from typing import Any
@@ -472,15 +473,16 @@ class QmessageQToolbox(Star):
         Usage: reply to a message, then run ``/face <表情>``. ``<表情>`` can be
         a face name (``微笑``), an English alias (``smile``), a numeric id
         (``14``), a ``#``-prefixed numeric id, a numeric range ``a-b``, an
-        emoji, or a repeat ``NxM`` (e.g. ``1x50`` reacts with face 1 fifty
-        times). An emoji reacts with the literal emoji itself; a name/number
-        reacts with the matching QQ face. Append ``cancel`` to remove the
-        reaction, ``big`` to send a big emoji.
+        emoji, or a repeat ``NxM``. A repeat toggles the same reaction
+        set/cancel (``1x20`` points face 1 then cancels, 20 times), since a
+        reaction can only appear once per account. An emoji reacts with the
+        literal emoji itself; a name/number reacts with the matching QQ face.
+        Append ``cancel`` to remove the reaction, ``big`` to send a big emoji.
 
-        A range or repeat is reacted to one by one, spaced by the configurable
+        A range or repeat is executed one by one, spaced by the configurable
         ``face_interval``; the bot first reports the expected duration and
-        afterwards a summary when any reaction failed. Run ``/face stop``
-        during a run to abort it early.
+        afterwards a summary when any step failed. Run ``/face stop`` during a
+        run to abort it early.
 
         NapCat uses ``set_msg_emoji_like``; other OneBot implementations that
         only provide ``set_msg_reaction`` are handled automatically.
@@ -489,7 +491,7 @@ class QmessageQToolbox(Star):
             ``/face 微笑`` reacts with the smiling QQ face.
             ``/face 💢`` reacts with the literal 💢 emoji.
             ``/face 66-70`` reacts with faces 66 to 70, one per interval.
-            ``/face 1x50`` reacts with face 1 fifty times.
+            ``/face 1x20`` blasts face 1 by toggling it 20 times.
             ``/face stop`` aborts a running range.
             ``/face 爱心 cancel`` removes the bot's heart reaction.
         """
@@ -542,7 +544,7 @@ class QmessageQToolbox(Star):
                     "id, a range `a-b` or a repeat `NxM`.",
                 )
                 return
-            plan = [str(codepoint)] * count
+            emojis = [str(codepoint)]
         else:
             face_ids = resolve_face_ids(base)
             if not face_ids:
@@ -551,14 +553,27 @@ class QmessageQToolbox(Star):
                     "a numeric id, a range `a-b` or a repeat `NxM`.",
                 )
                 return
-            plan = [str(face_id) for face_id in face_ids] * count
+            emojis = [str(face_id) for face_id in face_ids]
 
-        if len(plan) == 1:
+        # repeat toggles a single face (set/cancel) so it stays visible
+        toggle = count > 1 and len(emojis) == 1
+        if toggle:
+            ops = []
+            for i in range(count):
+                if i:
+                    ops.append((emojis[0], False))
+                ops.append((emojis[0], True))
+        else:
+            set_ = not cancel
+            ops = [(emoji, set_) for emoji in emojis] * count
+
+        if len(ops) == 1:
+            emoji, set_ = ops[0]
             used = await self._apply_reaction(
                 event,
                 message_id=int(reply.id),
-                emoji=plan[0],
-                set_=not cancel,
+                emoji=emoji,
+                set_=set_,
                 is_big=is_big,
             )
             if used is None:
@@ -571,20 +586,28 @@ class QmessageQToolbox(Star):
             return
 
         interval = max(float(self.config.get("face_interval", 1.0)), 0.0)
+        if toggle:
+            notice = (
+                f"将对表情 {emojis[0]} 轰炸 {count} 次（点/取消交替，共 "
+                f"{len(ops)} 次操作），间隔 {interval:g} 秒，预计约 "
+                f"{len(ops) * interval:g} 秒完成。可用 `/face stop` 中止。"
+            )
+        else:
+            notice = (
+                f"将依次回应 {len(ops)} 个表情，每个间隔 {interval:g} 秒，"
+                f"预计约 {len(ops) * interval:g} 秒完成。"
+                "可用 `/face stop` 中止。"
+            )
         await self._send_direct(
             event,
-            [{"type": "text", "data": {"text": (
-                f"将依次回应 {len(plan)} 个表情，每个间隔 {interval:g} 秒，"
-                f"预计约 {len(plan) * interval:g} 秒完成。"
-                "可用 `/face stop` 中止。"
-            )}}],
+            [{"type": "text", "data": {"text": notice}}],
         )
         key = self._face_key(event)
         self._face_stop.discard(key)
         failures = []
         done = 0
         aborted = False
-        for idx, emoji in enumerate(plan):
+        for idx, (emoji, set_) in enumerate(ops):
             if key in self._face_stop:
                 aborted = True
                 break
@@ -592,26 +615,26 @@ class QmessageQToolbox(Star):
                 event,
                 message_id=int(reply.id),
                 emoji=emoji,
-                set_=not cancel,
+                set_=set_,
                 is_big=is_big,
             )
             if used is None:
                 failures.append(emoji)
             else:
                 done += 1
-            if idx < len(plan) - 1 and interval > 0:
+            if idx < len(ops) - 1 and interval > 0:
                 await self._sleep_interruptible(interval, key)
         self._face_stop.discard(key)
         if aborted:
             await self._send_direct(
                 event,
-                [{"type": "text", "data": {"text": f"已中止范围回应，已完成 {done} 个。"}}],
+                [{"type": "text", "data": {"text": f"已中止，已完成 {done} 次操作。"}}],
             )
         elif failures:
             await self._send_direct(
                 event,
                 [{"type": "text", "data": {"text": (
-                    f"有 {len(failures)} 个表情回应失败："
+                    f"有 {len(failures)} 次操作失败："
                     + " ".join(failures)
                 )}}],
             )
@@ -754,6 +777,139 @@ class QmessageQToolbox(Star):
         if not await self._send_forward_msg(event, nodes):
             return "Failed to send the hidden face list."
         return None
+
+    @staticmethod
+    def _format_segments(segments: list) -> str:
+        """Compact single-line rendering of OneBot segments."""
+        parts = []
+        for seg in segments or []:
+            if not isinstance(seg, dict):
+                continue
+            stype = seg.get("type")
+            data = seg.get("data") or {}
+            if stype == "text":
+                text = str(data.get("text", ""))
+                if text.strip():
+                    parts.append(text)
+            elif stype == "face":
+                parts.append(f"[表情:{data.get('id')}]")
+            elif stype == "image":
+                summary = data.get("summary")
+                parts.append(f"[图:{summary}]" if summary else "[图]")
+            elif stype == "at":
+                parts.append(f"@{data.get('qq') or data.get('name') or ''}")
+            elif stype == "forward":
+                parts.append(f"[转发:{data.get('id')}]")
+            else:
+                parts.append(f"[{stype}]")
+        return " ".join(parts)
+
+    @filter.command("parse")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def parse(self, event: AstrMessageEvent):
+        """Parse a quoted message: reactions, face ids, image summaries, forward details.
+
+        Usage: reply to a message, then run ``/parse``. Reports the message id,
+        sender, time, text, face ids, image summaries, emoji reactions and, for
+        a merge-forward message, its node list.
+        """
+        if not self._check_permission(event, "parse_admin_only"):
+            yield event.plain_result("Permission denied: this command is admin-only.")
+            return
+        reply = next(
+            (seg for seg in event.get_messages() if isinstance(seg, Comp.Reply)),
+            None,
+        )
+        if reply is None:
+            yield event.plain_result(
+                "Missing quoted message: reply to a message first.",
+            )
+            return
+        message_id = int(reply.id)
+        try:
+            info = await event.bot.call_action("get_msg", message_id=message_id)
+        except Exception as exc:
+            logger.warning("parse: get_msg failed: %s", exc)
+            yield event.plain_result(f"Failed to fetch the quoted message: {exc}")
+            return
+
+        lines: list[str] = [f"消息ID: {message_id}"]
+        sender = info.get("sender") or {}
+        sender_name = sender.get("card") or sender.get("nickname") or "?"
+        sender_qq = sender.get("user_id", "?")
+        lines.append(f"发送者: {sender_name} ({sender_qq})")
+        ts = info.get("time")
+        if ts:
+            lines.append(
+                f"时间: {datetime.datetime.fromtimestamp(ts):%Y-%m-%d %H:%M:%S}"
+            )
+
+        lines.append("内容:")
+        forward_ids: list[str] = []
+        message = info.get("message")
+        if isinstance(message, str):
+            lines.append(f"  原文: {message}")
+        else:
+            for seg in message or []:
+                if not isinstance(seg, dict):
+                    continue
+                stype = seg.get("type")
+                data = seg.get("data") or {}
+                if stype == "text":
+                    text = str(data.get("text", ""))
+                    if text.strip():
+                        lines.append(f"  文本: {text}")
+                elif stype == "face":
+                    lines.append(f"  表情ID: {data.get('id')}")
+                elif stype == "image":
+                    summary = data.get("summary")
+                    url = data.get("url") or data.get("file") or ""
+                    if summary:
+                        lines.append(f"  图片summary: {summary}  url: {url}")
+                    else:
+                        lines.append(f"  图片: {url}")
+                elif stype == "at":
+                    lines.append(f"  @{data.get('qq') or data.get('name') or ''}")
+                elif stype == "forward":
+                    res_id = str(data.get("id"))
+                    forward_ids.append(res_id)
+                    lines.append(f"  合并转发: res_id={res_id}")
+                else:
+                    lines.append(f"  [{stype}]")
+
+        likes = info.get("emoji_likes_list")
+        if likes:
+            lines.append(f"回应 ({len(likes)}):")
+            for like in likes:
+                lines.append(
+                    f"  emoji_id={like.get('emoji_id')} "
+                    f"type={like.get('emoji_type')} x{like.get('likes_cnt')}"
+                )
+
+        for res_id in forward_ids:
+            lines.append(f"转发内容 (res_id={res_id}):")
+            try:
+                fwd = await event.bot.call_action("get_forward_msg", message_id=res_id)
+            except Exception as exc:
+                logger.warning("parse: get_forward_msg failed: %s", exc)
+                lines.append("  获取失败（消息可能已过期）")
+                continue
+            nodes = fwd.get("messages") or []
+            lines.append(f"  共 {len(nodes)} 条:")
+            for i, node in enumerate(nodes[:30]):
+                if not isinstance(node, dict):
+                    continue
+                data = node.get("data") or {}
+                nickname = data.get("nickname") or "?"
+                uid = data.get("user_id") or "?"
+                content = data.get("content") or data.get("message") or []
+                lines.append(
+                    f"  [{i}] {nickname}({uid}): {self._format_segments(content)}"
+                )
+            if len(nodes) > 30:
+                lines.append(f"  ... 其余 {len(nodes) - 30} 条省略")
+
+        yield event.plain_result("\n".join(lines))
 
     @filter.command("card")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
