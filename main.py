@@ -5,14 +5,13 @@ import datetime
 import json
 import random
 import re
-from pathlib import Path
 from typing import Any
 
 import astrbot.api.message_components as Comp
 from astrbot import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Image, Node
-from astrbot.api.star import Context, Star, StarTools
+from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 
 from .faces import emoji_codepoint, hidden_faces, is_emoji_text, resolve_face_ids
@@ -20,32 +19,24 @@ from .faces import emoji_codepoint, hidden_faces, is_emoji_text, resolve_face_id
 _HFACE_LIST_LIMIT = 20
 _FACE_REPEAT_LIMIT = 100
 _MAGIC_RE = re.compile(r"<\$[^>]*>")
-_MAGIC_CATALOG_FILE = "magic_templates.json"
-_MAGIC_LIST_LIMIT = 30
+
+_MAGIC_HELP = (
+    "用法：/magic <数字序列>，如 /magic 178 或 /magic 255 256 17 16，"
+    "生成 <$chr(n1)chr(n2)...>。数字支持十进制或 0x 十六进制（1~0xFFFF）。\n"
+    "也可引用含魔法表情的消息提取，或直接发 <$...> 模板。"
+)
 
 
-def parse_byte_arg(text: str) -> int | None:
-    """Parse a byte argument as decimal or ``0x`` hex, ``1..0xFF``."""
+def parse_code_arg(text: str) -> int | None:
+    """Parse a code argument as decimal or ``0x`` hex, ``1..0xFFFF``."""
     text = text.strip().lower()
     try:
         value = int(text, 16) if text.startswith("0x") else int(text)
     except ValueError:
         return None
-    return value if 1 <= value <= 0xFF else None
-
-_MAGIC_EXPRESSIONS: list[tuple[str, str]] = [
-    ("摇手手", "<$ÿĀ\x11\x10>"),
-    ("四叶草🍀", "<$ÿĀB >"),
-    ("小爪爪", "<$ǿĀC\x01>"),
-    ("升级版小爪爪", "<$ÿĀ\x11\">"),
-    ("小心心", "<$ǿĀF\x13>"),
-    ("小熊熊", "<$ÿĀD#>"),
-    ("魔法棒🪄", "<$ǿĀB#>"),
-    ("钻石", "<$ǿĀD\x0e>"),
-    ("滑稽", "<$²>"),
-]
-
-_MAGIC_NAME_MAP: dict[str, str] = dict(_MAGIC_EXPRESSIONS)
+    if not (1 <= value <= 0xFFFF) or 0xD800 <= value <= 0xDFFF:
+        return None
+    return value
 
 
 def build_image_summary_message(file: str, summary: str) -> list[dict]:
@@ -171,57 +162,6 @@ class QmessageQToolbox(Star):
         super().__init__(context)
         self.config = config if config is not None else {}
         self._face_stop: set[str] = set()
-        self._magic_learned: list[str] = []
-        try:
-            self._magic_file = (
-                Path(StarTools.get_data_dir("astrbot_plugin_qmessageq"))
-                / _MAGIC_CATALOG_FILE
-            )
-        except Exception as exc:
-            logger.warning("magic: no data dir: %s", exc)
-            self._magic_file = None
-        self._load_magic_learned()
-
-    def _magic_items(self) -> list[tuple[str | None, str]]:
-        """Known + learned magic expressions as ``(name, template)`` pairs."""
-        items = list(_MAGIC_EXPRESSIONS)
-        items.extend((None, t) for t in self._magic_learned)
-        return items
-
-    def _load_magic_learned(self) -> None:
-        if self._magic_file is None:
-            return
-        try:
-            data = json.loads(self._magic_file.read_text(encoding="utf-8"))
-        except (FileNotFoundError, ValueError, OSError):
-            self._magic_learned = []
-            return
-        if isinstance(data, list):
-            self._magic_learned = [
-                str(t) for t in data if isinstance(t, str) and _MAGIC_RE.fullmatch(t)
-            ]
-
-    def _save_magic_learned(self) -> None:
-        if self._magic_file is None:
-            return
-        try:
-            self._magic_file.write_text(
-                json.dumps(self._magic_learned, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError as exc:
-            logger.warning("magic: failed to save catalog: %s", exc)
-
-    def _learn_magic_templates(self, templates: list[str]) -> None:
-        changed = False
-        known = {t for _, t in _MAGIC_EXPRESSIONS}
-        for t in templates:
-            if t in known or t in self._magic_learned:
-                continue
-            self._magic_learned.append(t)
-            changed = True
-        if changed:
-            self._save_magic_learned()
 
     def _face_key(self, event: AstrMessageEvent) -> str:
         """A per-conversation key used to scope ``face stop`` signals."""
@@ -1156,15 +1096,12 @@ class QmessageQToolbox(Star):
     async def magic(self, event: AstrMessageEvent, expr: GreedyStr):
         """Output QQ magic-expression (魔法表情) templates.
 
-        QQ renders ``<$...>`` templates embedded in text as magic emoji. The
-        catalog is seeded with known ones and auto-learns from real messages
-        (exact bytes). Usage: ``/magic <名称|编号>`` sends a known entry;
-        ``/magic c<ID>`` builds the single-char form ``<$chr(ID)>``; ``/magic
-        m <p1> <p2>`` / ``/magic m2 <p1> <p2>`` builds the multi-char forms
-        ``<$ÿĀ p1 p2>`` / ``<$ǿĀ p1 p2>`` (p1/p2 in decimal or ``0x`` hex);
-        ``/magic list`` shows the catalog; ``/magic <模板>`` sends an arbitrary
-        template; reply to a message containing magic expressions to re-send
-        and learn them.
+        QQ renders ``<$...>`` templates embedded in text as magic emoji. Stateless
+        generator: ``/magic <数字序列>`` builds ``<$chr(n1)chr(n2)...>`` (e.g.
+        ``/magic 255 256 17 16`` -> ``<$ÿĀ\x11\x10>`` 摇手手); ``/magic <模板>``
+        sends an arbitrary template; reply to a message containing magic
+        expressions to re-send them. Run without args for the list of tested
+        templates.
         """
         if not self._check_permission(event, "magic_admin_only"):
             yield event.plain_result("Permission denied: this command is admin-only.")
@@ -1183,86 +1120,24 @@ class QmessageQToolbox(Star):
             if not templates:
                 yield event.plain_result("引用的消息里没有魔法表情模板。")
                 return
-            self._learn_magic_templates(templates)
             yield event.chain_result([Comp.Plain("".join(templates))])
             return
 
         arg = expr.strip()
         if not arg:
-            yield event.plain_result(
-                "Missing content: run `/magic <名称|编号>`, `/magic c<ID>`, "
-                "`/magic list`, `/magic <模板>`, or reply to a message.",
-            )
-            return
-        if arg == "list":
-            await self._send_magic_list(event)
-            event.should_call_llm(True)
-            return
-        items = self._magic_items()
-        if arg.isdigit() and 1 <= int(arg) <= len(items):
-            yield event.chain_result([Comp.Plain(items[int(arg) - 1][1])])
-            return
-        if arg in _MAGIC_NAME_MAP:
-            yield event.chain_result([Comp.Plain(_MAGIC_NAME_MAP[arg])])
-            return
-        if arg.lower().startswith("c") and arg[1:].isdigit():
-            code = int(arg[1:])
-            if 1 <= code <= 0xFFFF:
-                template = f"<${chr(code)}>"
-                self._learn_magic_templates([template])
-                yield event.chain_result([Comp.Plain(template)])
-                return
-        parts = arg.split()
-        if parts and parts[0] in ("m", "m1", "m2"):
-            base = 0x01FF if parts[0] == "m2" else 0x00FF
-            if len(parts) < 3:
-                yield event.plain_result(
-                    "用法：`/magic m <p1> <p2>`（基座 ÿ）或 `/magic m2 <p1> <p2>`（基座 ǿ）。",
-                )
-                return
-            p1 = parse_byte_arg(parts[1])
-            p2 = parse_byte_arg(parts[2])
-            if p1 is None or p2 is None:
-                yield event.plain_result(
-                    "无效参数：p1/p2 用十进制或 0x 十六进制，范围 1~255。",
-                )
-                return
-            template = f"<${chr(base)}\u0100{chr(p1)}{chr(p2)}>"
-            self._learn_magic_templates([template])
-            yield event.chain_result([Comp.Plain(template)])
+            yield event.plain_result(_MAGIC_HELP)
             return
         if _MAGIC_RE.search(arg):
-            self._learn_magic_templates([arg])
             yield event.chain_result([Comp.Plain(arg)])
             return
-        yield event.plain_result(
-            f"未知的魔法表情 '{arg}'：用 `/magic list` 查看目录，`/magic c<ID>` "
-            "按码点探索，或直接发 `<$...>` 模板。",
-        )
-
-    async def _send_magic_list(self, event: AstrMessageEvent) -> None:
-        """Send all known magic expressions as a forward message."""
-        items = self._magic_items()
-        if not items:
-            yield event.plain_result("魔法表情目录为空。")
-            return
-        self_uin = str(getattr(event.message_obj, "self_id", None) or "10001")
-        nodes = []
-        for i, (name, template) in enumerate(items[:_MAGIC_LIST_LIMIT], start=1):
-            label = f"#{i} {name}" if name else f"#{i}"
-            nodes.append(
-                Node(content=[Comp.Plain(template)], name=label, uin=self_uin)
-            )
-        if len(items) > _MAGIC_LIST_LIMIT:
-            nodes.append(
-                Node(
-                    content=[Comp.Plain(f"... 其余 {len(items) - _MAGIC_LIST_LIMIT} 个省略")],
-                    name="QmessageQ",
-                    uin=self_uin,
-                ),
-            )
-        if not await self._send_forward_msg(event, nodes):
-            yield event.plain_result("Failed to send the magic expression list.")
+        codes = []
+        for token in arg.split():
+            code = parse_code_arg(token)
+            if code is None:
+                yield event.plain_result(_MAGIC_HELP)
+                return
+            codes.append(code)
+        yield event.chain_result([Comp.Plain("<$" + "".join(chr(c) for c in codes) + ">")])
 
     @filter.command("card")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
