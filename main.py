@@ -20,12 +20,14 @@ from .faces import emoji_codepoint, hidden_faces, is_emoji_text, resolve_face_id
 _HFACE_LIST_LIMIT = 20
 _FACE_REPEAT_LIMIT = 100
 _MAGIC_RE = re.compile(r"<\$[^>]*>")
-_MAGIC_SEND_LIMIT = 100
+_MAGIC_SEND_LIMIT = 4096
+_MAGIC_CHUNK = 100
 
 _MAGIC_HELP = (
     "用法：/magic <字段>...，如 /magic 178 或 /magic 255 256 17 16，"
     "生成 <$chr(...)>。每个字段支持十进制/0x 十六进制（1~0xFFFF）或 a-b 范围"
-    "（如 /magic 255 256 17 1-32，展开后一起发出，最多 100 个）。\n"
+    "（如 /magic 255 256 17 1-32，多字段范围取笛卡尔积，每 100 个发一条，"
+    f"最多 {_MAGIC_SEND_LIMIT} 个）。\n"
     "也可引用含魔法表情的消息解析码点，或直接发 <$...> 模板。"
 )
 
@@ -1167,7 +1169,15 @@ class QmessageQToolbox(Star):
                 f"Too many combinations: at most {_MAGIC_SEND_LIMIT}.",
             )
             return
-        yield event.chain_result([Comp.Plain("".join(templates))])
+        if len(templates) == 1:
+            yield event.chain_result([Comp.Plain(templates[0])])
+            return
+        for i in range(0, len(templates), _MAGIC_CHUNK):
+            await self._send_direct(
+                event,
+                [{"type": "text", "data": {"text": "".join(templates[i:i + _MAGIC_CHUNK])}}],
+            )
+        event.should_call_llm(True)
 
     @filter.command("card")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
