@@ -19,6 +19,7 @@ from .faces import emoji_codepoint, hidden_faces, is_emoji_text, resolve_face_id
 
 _HFACE_LIST_LIMIT = 20
 _FACE_REPEAT_LIMIT = 100
+_FACE_RANGE_LIMIT = 20
 _MAGIC_RE = re.compile(r"<\$[^>]*>")
 _MAGIC_SEND_LIMIT = 4096
 _MAGIC_CHUNK = 100
@@ -589,6 +590,12 @@ class QmessageQToolbox(Star):
                 yield event.plain_result(
                     f"Unknown face '{head}': use a face name, an English alias, "
                     "a numeric id, a range `a-b` or a repeat `NxM`.",
+                )
+                return
+            if len(face_ids) > _FACE_RANGE_LIMIT:
+                yield event.plain_result(
+                    f"Too many faces: QQ limits reactions to at most "
+                    f"{_FACE_RANGE_LIMIT} per message.",
                 )
                 return
             emojis = [str(face_id) for face_id in face_ids]
