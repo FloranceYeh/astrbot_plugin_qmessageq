@@ -766,11 +766,19 @@ class QmessageQToolbox(Star):
                 "alias, a numeric id or a range `a-b`.",
             )
             return
-        chain: list = [Comp.Face(id=face_id) for face_id in face_ids]
+        message: list = [
+            {"type": "face", "data": {"id": face_id}} for face_id in face_ids
+        ]
         text = " ".join(tokens[1:]).strip()
         if text:
-            chain.append(Comp.Plain(text))
-        yield event.chain_result(chain)
+            message.append({"type": "text", "data": {"text": text}})
+        if not await self._send_direct(event, message):
+            yield event.plain_result(
+                f"Failed to send face(s) {face_ids[:20]}"
+                + ("..." if len(face_ids) > 20 else ""),
+            )
+            return
+        event.should_call_llm(True)
 
     async def _send_hidden_list(
         self, event: AstrMessageEvent, args: list[str]
