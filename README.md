@@ -18,7 +18,8 @@
 - **名片（`/card`）**：发送指定 QQ 或群的真实推荐名片卡片。
 - **戳一戳（`/poke`）**：在私聊中戳当前好友，或在群聊中按 QQ、@、昵称/群名片戳指定成员。
 - **实验性位置（`/location`）**：发送 OneBot `location` 消息段；当前 NapCat 只会构造无有效位置数据的空壳位置卡片，用于测试客户端表现。
-- **发送语音（`/voice`）**：把附带、引用或 URL 指向的音频作为 QQ 语音发送，NapCat 会自动转成 Silk。
+- **发送语音（`/voice`）**：把附带/引用的 QQ 语音、普通音频文件或 URL 指向的音频作为 QQ 语音发送，NapCat 会自动转成 Silk。
+- **语音转文件（`/voicefile`）**：引用 QQ 语音后转换成普通 WAV 文件发送，可直接下载或用播放器打开。
 - **回应表情（`/face`）**：引用一条消息后用表情回应（NapCat 的 `set_msg_emoji_like`），支持 `a-b` 范围一次回应多个、`NxM` 对单个表情点/取消交替轰炸， `/face stop` 中止。
 - **发送表情（`/hface`）**：把内置表情（含默认面板不显示的隐藏表情）作为消息发送，支持 `a-b` 范围及 `/hface list` 分页查看隐藏表情。
 - **解析引用消息（`/parse`）**：引用一条消息后解析其发送者、时间、内容、表情 ID、语音时长/大小/转写、图片 summary、表情回应与合并转发内容（以合并转发消息分节点返回）。
@@ -38,6 +39,7 @@
 - `poke_admin_only`：`poke` 戳一戳命令仅管理员可用。
 - `location_admin_only`：实验性 `location` 命令仅管理员可用。
 - `voice_admin_only`：`voice` 语音发送命令仅管理员可用。
+- `voicefile_admin_only`：`voicefile` 语音转文件命令仅管理员可用。
 - `face_admin_only`：`face` 命令仅管理员可用。
 - `face_interval`：`face` 范围回应时每个表情之间的间隔秒数（默认 `1`，设为 `0` 则不停顿）。
 - `hface_admin_only`：`hface` 命令仅管理员可用。
@@ -128,7 +130,17 @@
 /voice
 ```
 
-第二种用法需要在同一条命令中附带语音，或引用一条语音消息。支持 NapCat/FFmpeg 能读取的常见音频格式，协议端会转换成 QQ 使用的 Silk 语音；无法下载、解码或转换时会返回错误。
+第二种用法可以在同一条命令中附带 QQ 语音，引用一条语音消息，或引用作为普通文件发送的音频。普通文件会按扩展名识别，支持 AAC、AMR、APE、FLAC、M4A、MP3、OGG、Opus、Silk、WAV、WMA 等常见格式；协议端会将 NapCat/FFmpeg 能读取的音频转换成 QQ 使用的 Silk 语音，无法下载、解码或转换时会返回错误。
+
+### 语音转可播放文件
+
+引用一条 QQ 语音消息后执行：
+
+```
+/voicefile
+```
+
+插件调用 NapCat `get_record` 将语音反向转换成 WAV，然后以普通文件发送。转换结果不再是 QQ 语音气泡，可以下载、保存或交给常规音频播放器播放。该功能需要 NapCat 能读取原语音，并正确配置 FFmpeg。
 
 ### 回应表情
 
@@ -215,11 +227,11 @@ QQ 的「魔法表情/动态表情」不通过 face 段下发，而是以内嵌�
 
 ## 说明
 
-- 命令名固定为 `himg` / `fake` / `at` / `card` / `poke` / `location` / `voice` / `face` / `hface` / `parse` / `magic`（AstrBot 的 `@filter.command` 在导入时注册，暂不支持按配置动态改名）。
 - `himg` 依赖协议端透传图片段 `summary` 字段（NapCat / LLOneBot 支持），实际渲染效果请以你的客户端为准。
 - `fake` 节点的头像由节点的发送人 QQ 号决定（NapCat 按 `user_id` 渲染），`头像=` / `ava=` 实质是替换节点的发送人 QQ。
 - `location` 依赖协议端实现 OneBot `location` 段；当前 NapCat 仅生成占位 `ShareLocation` 元素，不保证能显示有效位置。
-- `voice` 依赖 NapCat 的语音转换能力；非 Silk 音频通常需要协议端正确配置 FFmpeg。
+- `voice` 依赖 NapCat 的语音转换能力；引用普通音频文件时需要 AstrBot 能取得该文件的 URL 或本地路径，非 Silk 音频通常还需要协议端正确配置 FFmpeg。
+- `voicefile` 使用 NapCat `get_record` 转换引用的 QQ 语音，并把 WAV 作为普通文件发送；协议端无法下载原语音或 FFmpeg 转换失败时无法使用。
 - `poke` 依赖 NapCat 的 `send_poke` 扩展接口与可用的 `packetBackend` 发包能力；`group_poke`、`friend_poke` 只是该接口的兼容别名。
 - `face` 依赖协议端的回应动作：NapCat 使用 `set_msg_emoji_like`，LLOneBot 等实现使用 `set_msg_reaction`，插件会自动回退。
 - 表情编号以 NapCat 的 QSid 为准，内置映射与隐藏表情数据见插件目录的 `faces.py`。

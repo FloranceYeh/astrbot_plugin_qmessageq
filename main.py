@@ -13,7 +13,7 @@ from typing import Any
 import astrbot.api.message_components as Comp
 from astrbot import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import Image, Node, Record
+from astrbot.api.message_components import File, Image, Node, Record
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 
@@ -25,6 +25,20 @@ _FACE_RANGE_LIMIT = 20
 _MAGIC_RE = re.compile(r"<\$[^>]*>")
 _MAGIC_SEND_LIMIT = 4096
 _MAGIC_CHUNK = 100
+_AUDIO_FILE_EXTENSIONS = (
+    ".aac",
+    ".amr",
+    ".ape",
+    ".flac",
+    ".m4a",
+    ".mp3",
+    ".ogg",
+    ".opus",
+    ".silk",
+    ".slk",
+    ".wav",
+    ".wma",
+)
 
 _MAGIC_HELP = (
     "用法：/magic <字段>...，如 /magic 178（单字符=face ID）或 /magic 255 256 <c> <d>。\n"
@@ -128,6 +142,32 @@ def find_attached_record(messages: list) -> Record | None:
     return None
 
 
+def find_attached_audio_file(messages: list) -> File | None:
+    """Return an attached or quoted file whose name/path looks like audio."""
+
+    def is_audio_file(file: File) -> bool:
+        candidates = (
+            getattr(file, "name", ""),
+            getattr(file, "file_", ""),
+            getattr(file, "url", ""),
+        )
+        return any(
+            str(candidate).lower().split("?", 1)[0].endswith(_AUDIO_FILE_EXTENSIONS)
+            for candidate in candidates
+            if candidate
+        )
+
+    for seg in messages:
+        if isinstance(seg, File) and is_audio_file(seg):
+            return seg
+    for seg in messages:
+        if isinstance(seg, Comp.Reply):
+            for file in seg.chain or []:
+                if isinstance(file, File) and is_audio_file(file):
+                    return file
+    return None
+
+
 _AVATAR_SUFFIX_RE = re.compile(r"(?:^|\s)(?:头像|ava)=(\S+)$")
 
 
@@ -190,8 +230,8 @@ class QmessageQToolbox(Star):
     (``fake``), real ``@`` mentions (``at``), contact cards (``card``), pokes
     (``poke``), quoted message reactions (``face``), hidden face sending
     (``hface``), experimental location cards (``location``), audio sending
-    (``voice``) and an LLM ``at_user`` tool that prepends an ``@`` to the bot's
-    reply.
+    (``voice``), voice-to-file conversion (``voicefile``) and an LLM ``at_user``
+    tool that prepends an ``@`` to the bot's reply.
     """
 
     def __init__(self, context: Context, config: dict | None = None) -> None:
@@ -1576,9 +1616,10 @@ class QmessageQToolbox(Star):
     async def voice(self, event: AstrMessageEvent, source: GreedyStr):
         """Send an attached, quoted or remotely hosted audio file as QQ voice.
 
-        Usage: attach/reply to a voice and run ``/voice``, or use
-        ``/voice <http(s) audio URL>``. Attached audio is converted to base64;
-        NapCat then converts supported input formats to Silk before sending.
+        Usage: attach/reply to a voice or audio file and run ``/voice``, or use
+        ``/voice <http(s) audio URL>``. Attached voice is converted to base64;
+        referenced audio files use their resolved URL/path. NapCat then converts
+        supported input formats to Silk before sending.
         """
         if not self._check_permission(event, "voice_admin_only"):
             yield event.plain_result(
@@ -1586,7 +1627,9 @@ class QmessageQToolbox(Star):
             )
             return
 
-        record = find_attached_record(event.get_messages())
+        messages = event.get_messages()
+        record = find_attached_record(messages)
+        audio_file = find_attached_audio_file(messages)
         file = ""
         if record is not None:
             try:
@@ -1596,11 +1639,21 @@ class QmessageQToolbox(Star):
                 yield event.plain_result("Failed to load the attached audio.")
                 return
             file = f"base64://{base64_data}"
+        elif audio_file is not None:
+            try:
+                file = await audio_file.get_file(allow_return_url=True)
+            except Exception as exc:
+                logger.warning("voice: failed to resolve the audio file: %s", exc)
+                yield event.plain_result("Failed to load the referenced audio file.")
+                return
+            if not file:
+                yield event.plain_result("Failed to load the referenced audio file.")
+                return
         else:
             url = source.strip()
             if not re.fullmatch(r"https?://\S+", url):
                 yield event.plain_result(
-                    "Missing audio: attach/reply to a voice or use "
+                    "Missing audio: attach/reply to a voice or audio file, or use "
                     "`/voice <audio URL>`."
                 )
                 return
@@ -1611,6 +1664,84 @@ class QmessageQToolbox(Star):
             [{"type": "record", "data": {"file": file}}],
         ):
             yield event.plain_result("Failed to send the voice message.")
+            return
+        event.should_call_llm(True)
+
+    @filter.command("voicefile")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def voicefile(self, event: AstrMessageEvent):
+        """Convert an attached or quoted QQ voice to a playable WAV file.
+
+        NapCat resolves the received record, converts it through FFmpeg and
+        returns Base64/path data; the result is then sent as a normal file.
+        """
+        if not self._check_permission(event, "voicefile_admin_only"):
+            yield event.plain_result(
+                self._permission_denied_message(event, "voicefile_admin_only")
+            )
+            return
+
+        messages = event.get_messages()
+        record = find_attached_record(messages)
+        if record is None:
+            yield event.plain_result(
+                "Missing voice: attach or reply to a QQ voice message first."
+            )
+            return
+        record_ref = next(
+            (
+                str(value)
+                for value in (
+                    getattr(record, "file", ""),
+                    getattr(record, "url", ""),
+                    getattr(record, "path", ""),
+                )
+                if value
+            ),
+            "",
+        )
+        if not record_ref:
+            yield event.plain_result("Failed to resolve the quoted voice file.")
+            return
+
+        try:
+            result = await event.bot.call_action(
+                "get_record",
+                file=record_ref,
+                out_format="wav",
+            )
+        except Exception as exc:
+            logger.warning("voicefile: get_record failed: %s", exc)
+            yield event.plain_result(
+                "Failed to convert the voice to WAV; check NapCat's FFmpeg "
+                "configuration."
+            )
+            return
+        if not isinstance(result, dict):
+            yield event.plain_result("Failed to convert the voice: empty result.")
+            return
+
+        encoded = str(result.get("base64") or "")
+        converted = (
+            f"base64://{encoded}"
+            if encoded
+            else str(result.get("url") or result.get("file") or "")
+        )
+        if not converted:
+            yield event.plain_result("Failed to read the converted WAV file.")
+            return
+
+        reply = next(
+            (seg for seg in messages if isinstance(seg, Comp.Reply)),
+            None,
+        )
+        suffix = f"_{reply.id}" if reply is not None and reply.id else ""
+        name = f"voice{suffix}.wav"
+        if not await self._send_direct(
+            event,
+            [{"type": "file", "data": {"file": converted, "name": name}}],
+        ):
+            yield event.plain_result("Failed to send the converted WAV file.")
             return
         event.should_call_llm(True)
 

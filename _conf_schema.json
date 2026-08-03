@@ -53,6 +53,12 @@
     "hint": "开启后，voice 语音发送命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
     "default": true
   },
+  "voicefile_admin_only": {
+    "description": "voicefile 命令仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，voicefile 语音转可播放文件命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
+    "default": true
+  },
   "face_admin_only": {
     "description": "face 命令仅管理员可用",
     "type": "bool",
