@@ -1,98 +1,119 @@
 {
-  "admin_only": {
-    "description": "全局默认：命令仅管理员可用",
-    "type": "bool",
-    "hint": "全局兜底开关，作为各命令未单独配置时的默认值；各命令可用下方的 <命令名>_admin_only 单独覆盖。",
-    "default": true
+  "access_control": {
+    "description": "🔐 通用权限",
+    "type": "object",
+    "hint": "统一设置命令白名单和默认管理员限制。",
+    "items": {
+      "admin_only": {
+        "description": "命令默认仅管理员可用",
+        "type": "bool",
+        "hint": "全局兜底开关；各命令可在“各命令权限”分组中单独覆盖。",
+        "default": true
+      },
+      "user_id_whitelist": {
+        "description": "命令使用者 QQ ID 白名单",
+        "type": "list",
+        "hint": "非空时取代所有管理员权限校验：只有名单内 QQ ID 可以使用全部命令及 LLM at_user 工具，管理员也必须在名单中。留空时使用管理员权限设置。",
+        "default": []
+      }
+    }
   },
-  "user_id_whitelist": {
-    "description": "命令使用者 QQ ID 白名单",
-    "type": "list",
-    "hint": "非空时以此列表作为统一权限规则：只有其中的发送者 QQ ID 可以使用所有命令及 LLM at_user 工具，名单内无需管理员权限，管理员也必须在名单中。留空时沿用 admin_only 设置。",
-    "default": []
+  "command_permissions": {
+    "description": "🛡️ 各命令权限",
+    "type": "object",
+    "hint": "分别控制每个命令是否仅管理员可用；白名单非空时这些开关不参与判断。",
+    "items": {
+      "himg_admin_only": {
+        "description": "himg 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "fake_admin_only": {
+        "description": "fake 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "at_admin_only": {
+        "description": "at 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "card_admin_only": {
+        "description": "card 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "poke_admin_only": {
+        "description": "poke 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "location_admin_only": {
+        "description": "location 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "voice_admin_only": {
+        "description": "voice 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "voicefile_admin_only": {
+        "description": "voicefile 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "face_admin_only": {
+        "description": "face 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "hface_admin_only": {
+        "description": "hface 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "parse_admin_only": {
+        "description": "parse 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "magic_admin_only": {
+        "description": "magic 命令仅管理员可用",
+        "type": "bool",
+        "default": true
+      },
+      "at_user_admin_only": {
+        "description": "at_user 工具仅管理员可用",
+        "type": "bool",
+        "default": true
+      }
+    }
   },
-  "himg_admin_only": {
-    "description": "himg 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，himg 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
+  "poke_settings": {
+    "description": "👉 戳一戳设置",
+    "type": "object",
+    "hint": "设置批量戳一戳的执行节奏。",
+    "items": {
+      "poke_interval": {
+        "description": "戳一戳操作间隔（秒）",
+        "type": "float",
+        "hint": "重复或随机批量戳一戳时，每次操作之间等待的秒数；设为 0 则不停顿。",
+        "default": 1.0
+      }
+    }
   },
-  "fake_admin_only": {
-    "description": "fake 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，fake 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "at_admin_only": {
-    "description": "at 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，at 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "card_admin_only": {
-    "description": "card 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，card 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "poke_admin_only": {
-    "description": "poke 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，poke 戳一戳命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "location_admin_only": {
-    "description": "location 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，实验性 location 位置卡片命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "voice_admin_only": {
-    "description": "voice 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，voice 语音发送命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "voicefile_admin_only": {
-    "description": "voicefile 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，voicefile 语音转可播放文件命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "face_admin_only": {
-    "description": "face 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，face 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "face_interval": {
-    "description": "face 范围回应的间隔（秒）",
-    "type": "float",
-    "hint": "多个表情（如 a-b 范围）依次回应时的间隔秒数，用于控制请求节奏；设为 0 则不停顿。默认 1 秒。",
-    "default": 1.0
-  },
-  "hface_admin_only": {
-    "description": "hface 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，hface 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "parse_admin_only": {
-    "description": "parse 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，parse 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "magic_admin_only": {
-    "description": "magic 命令仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，magic 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
-  },
-  "at_user_admin_only": {
-    "description": "at_user 工具仅管理员可用",
-    "type": "bool",
-    "hint": "开启后，LLM at_user 工具仅对管理员生效；未设置时使用 admin_only 的默认值。",
-    "default": true
+  "face_settings": {
+    "description": "😀 表情回应设置",
+    "type": "object",
+    "hint": "设置批量回应表情的执行节奏。",
+    "items": {
+      "face_interval": {
+        "description": "face 范围回应的间隔（秒）",
+        "type": "float",
+        "hint": "多个表情或重复操作依次回应时的间隔秒数；设为 0 则不停顿。",
+        "default": 1.0
+      }
+    }
   }
 }

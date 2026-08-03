@@ -22,9 +22,23 @@ from .faces import emoji_codepoint, hidden_faces, is_emoji_text, resolve_face_id
 _HFACE_LIST_LIMIT = 20
 _FACE_REPEAT_LIMIT = 100
 _FACE_RANGE_LIMIT = 20
+_POKE_RANDOM_LIMIT = 20
+_POKE_REPEAT_LIMIT = 100
+_POKE_OPERATION_LIMIT = 100
 _MAGIC_RE = re.compile(r"<\$[^>]*>")
 _MAGIC_SEND_LIMIT = 4096
 _MAGIC_CHUNK = 100
+_POKE_RANDOM_RE = re.compile(
+    r"^(?:random|r)(?:\s+(\d+)(?:\s*[x×]\s*(\d+))?)?$",
+    re.IGNORECASE,
+)
+_POKE_REPEAT_RE = re.compile(r"^(.*?)\s*[x×]\s*(\d+)\s*$", re.IGNORECASE)
+_CONFIG_GROUPS = (
+    "access_control",
+    "command_permissions",
+    "poke_settings",
+    "face_settings",
+)
 _AUDIO_FILE_EXTENSIONS = (
     ".aac",
     ".amr",
@@ -263,8 +277,19 @@ class QmessageQToolbox(Star):
         if whitelist:
             sender_id = str(event.get_sender_id() or "").strip()
             return sender_id in whitelist
-        restricted = self.config.get(key, self.config.get("admin_only", True))
+        restricted = self._config_value(
+            key,
+            self._config_value("admin_only", True),
+        )
         return not restricted or event.is_admin()
+
+    def _config_value(self, key: str, default: Any = None) -> Any:
+        """Read a grouped config value, with flat-schema backward compatibility."""
+        for group_name in _CONFIG_GROUPS:
+            group = self.config.get(group_name)
+            if isinstance(group, dict) and key in group:
+                return group[key]
+        return self.config.get(key, default)
 
     def _user_id_whitelist(self) -> set[str]:
         """Return normalized QQ IDs allowed to use commands.
@@ -273,7 +298,7 @@ class QmessageQToolbox(Star):
         comma/newline separated string makes hand-written configuration files
         work as expected too. An empty list disables the whitelist restriction.
         """
-        raw = self.config.get("user_id_whitelist", [])
+        raw = self._config_value("user_id_whitelist", [])
         if isinstance(raw, str):
             values = re.split(r"[\s,，、]+", raw)
         elif isinstance(raw, (list, tuple, set)):
@@ -728,7 +753,7 @@ class QmessageQToolbox(Star):
             event.should_call_llm(True)
             return
 
-        interval = max(float(self.config.get("face_interval", 1.0)), 0.0)
+        interval = max(float(self._config_value("face_interval", 1.0)), 0.0)
         if toggle:
             notice = (
                 f"将对表情 {emojis[0]} 轰炸 {count} 次（点/取消交替，共 "
@@ -1480,8 +1505,10 @@ class QmessageQToolbox(Star):
 
         Usage: ``/poke`` pokes the current friend in private chat or the command
         sender in a group. In a group, ``/poke <QQ|@|nickname>`` selects another
-        member and ``/poke random`` selects a random member. NapCat must have
-        packetBackend sending support available.
+        member; append ``xN`` to repeat it. ``/poke random N`` selects N random
+        members, while ``/poke random NxM`` pokes N members M times each. Spaces
+        around ``x`` are accepted. NapCat must have packetBackend sending support
+        available.
         """
         if not self._check_permission(event, "poke_admin_only"):
             yield event.plain_result(
@@ -1497,82 +1524,158 @@ class QmessageQToolbox(Star):
 
         raw_target = target.strip()
         normalized = raw_target.lstrip("@").strip()
-        random_target = normalized.lower() in ("random", "r")
-        if random_target and not is_group:
-            yield event.plain_result("Random poke is only available in group chats.")
+        random_match = _POKE_RANDOM_RE.fullmatch(normalized)
+        first_token = normalized.split(maxsplit=1)[0].lower() if normalized else ""
+        if first_token in ("random", "r") and random_match is None:
+            yield event.plain_result(
+                "Invalid random syntax: use `/poke random [N]` or "
+                "`/poke random NxM`."
+            )
             return
 
-        target_qq = str(peer_id)
-        if is_group:
-            self_id = str(event.get_self_id() or "")
-            mentioned = next(
-                (
-                    str(seg.qq)
-                    for seg in event.get_messages()
-                    if isinstance(seg, Comp.At)
-                    and str(seg.qq).isdigit()
-                    and str(seg.qq) != self_id
-                ),
-                "",
-            )
-            if random_target:
-                try:
-                    group = await event.get_group()
-                except Exception as exc:
-                    logger.warning("poke: failed to fetch the group: %s", exc)
-                    group = None
-                candidates = [
+        repeat_count = 1
+        target_count = 1
+        targets: list[str] = []
+        self_id = str(event.get_self_id() or "")
+
+        if random_match is not None:
+            if not is_group:
+                yield event.plain_result(
+                    "Random poke is only available in group chats."
+                )
+                return
+            target_count = int(random_match.group(1) or 1)
+            repeat_count = int(random_match.group(2) or 1)
+            if not (1 <= target_count <= _POKE_RANDOM_LIMIT):
+                yield event.plain_result(
+                    f"Random target count must be 1-{_POKE_RANDOM_LIMIT}."
+                )
+                return
+            if not (1 <= repeat_count <= _POKE_REPEAT_LIMIT):
+                yield event.plain_result(
+                    f"Poke repeat count must be 1-{_POKE_REPEAT_LIMIT}."
+                )
+                return
+            if target_count * repeat_count > _POKE_OPERATION_LIMIT:
+                yield event.plain_result(
+                    f"Too many poke operations: at most {_POKE_OPERATION_LIMIT}."
+                )
+                return
+            try:
+                group = await event.get_group()
+            except Exception as exc:
+                logger.warning("poke: failed to fetch the group: %s", exc)
+                group = None
+            candidates = list(
+                dict.fromkeys(
                     str(getattr(member, "user_id", ""))
                     for member in list(getattr(group, "members", None) or [])
                     if str(getattr(member, "user_id", "")).isdigit()
                     and str(getattr(member, "user_id", "")) != self_id
-                ]
-                if not candidates:
-                    yield event.plain_result(
-                        "Failed to choose a random member from this group."
-                    )
-                    return
-                target_qq = random.choice(candidates)
-            elif mentioned:
-                target_qq = mentioned
-            elif not normalized or normalized.lower() in ("me", "self", "我", "自己"):
-                target_qq = str(event.get_sender_id() or "")
-            elif normalized.isdigit():
-                target_qq = normalized
-            else:
-                resolved = await self._resolve_member_qq(event, normalized)
-                if resolved is None:
-                    yield event.plain_result(
-                        f"Invalid target '{raw_target}': use a QQ number, @ a "
-                        "member, an exact group nickname/card, or 'random'."
-                    )
-                    return
-                target_qq = resolved
+                )
+            )
+            if not candidates:
+                yield event.plain_result(
+                    "Failed to choose random members from this group."
+                )
+                return
+            targets = random.sample(candidates, min(target_count, len(candidates)))
+        else:
+            repeat_match = _POKE_REPEAT_RE.fullmatch(normalized)
+            repeat_base = repeat_match.group(1).strip() if repeat_match else normalized
+            requested_repeat = int(repeat_match.group(2)) if repeat_match else 1
+            if not (1 <= requested_repeat <= _POKE_REPEAT_LIMIT):
+                yield event.plain_result(
+                    f"Poke repeat count must be 1-{_POKE_REPEAT_LIMIT}."
+                )
+                return
 
-        if not target_qq.isdigit():
-            yield event.plain_result("Failed to resolve the poke target's QQ ID.")
+            if is_group:
+                mentioned = next(
+                    (
+                        str(seg.qq)
+                        for seg in event.get_messages()
+                        if isinstance(seg, Comp.At)
+                        and str(seg.qq).isdigit()
+                        and str(seg.qq) != self_id
+                    ),
+                    "",
+                )
+                target_qq = ""
+                if mentioned:
+                    target_qq = mentioned
+                    repeat_count = requested_repeat
+                else:
+                    full_resolved = None
+                    if repeat_match and normalized:
+                        full_resolved = await self._resolve_member_qq(event, normalized)
+                    if full_resolved is not None:
+                        target_qq = full_resolved
+                    else:
+                        repeat_count = requested_repeat
+                        lowered = repeat_base.lower()
+                        if not repeat_base or lowered in ("me", "self", "我", "自己"):
+                            target_qq = str(event.get_sender_id() or "")
+                        elif repeat_base.isdigit():
+                            target_qq = repeat_base
+                        else:
+                            target_qq = await self._resolve_member_qq(
+                                event,
+                                repeat_base,
+                            ) or ""
+                targets = [target_qq]
+            else:
+                repeat_count = requested_repeat
+                targets = [str(peer_id)]
+
+            if not targets[0].isdigit():
+                yield event.plain_result(
+                    f"Invalid target '{raw_target}': use a QQ number, @ a member, "
+                    "an exact group nickname/card, or 'random'."
+                )
+                return
+
+        operations = [qq for qq in targets for _ in range(repeat_count)]
+        if len(operations) > _POKE_OPERATION_LIMIT:
+            yield event.plain_result(
+                f"Too many poke operations: at most {_POKE_OPERATION_LIMIT}."
+            )
             return
 
-        payload: dict[str, Any] = {"user_id": target_qq, **routing}
-        if is_group:
-            payload["group_id"] = str(peer_id)
         try:
-            await event.bot.call_action("send_poke", **payload)
-        except Exception as exc:
-            logger.warning("poke: send_poke failed: %s", exc)
-            error_text = str(exc).lower()
-            if "packetbackend" in error_text or "发包能力" in error_text:
-                yield event.plain_result(
-                    "Failed to poke: NapCat packetBackend sending support is "
-                    "unavailable."
-                )
-            elif is_unsupported_api_error(exc):
-                yield event.plain_result(
-                    "Failed to poke: this protocol client does not support send_poke."
-                )
-            else:
-                yield event.plain_result("Failed to send the poke.")
-            return
+            interval = max(float(self._config_value("poke_interval", 1.0)), 0.0)
+        except (TypeError, ValueError):
+            interval = 1.0
+        failures = 0
+        for index, target_qq in enumerate(operations):
+            payload: dict[str, Any] = {"user_id": target_qq, **routing}
+            if is_group:
+                payload["group_id"] = str(peer_id)
+            try:
+                await event.bot.call_action("send_poke", **payload)
+            except Exception as exc:
+                logger.warning("poke: send_poke failed: %s", exc)
+                error_text = str(exc).lower()
+                if "packetbackend" in error_text or "发包能力" in error_text:
+                    yield event.plain_result(
+                        "Failed to poke: NapCat packetBackend sending support is "
+                        "unavailable."
+                    )
+                    return
+                if is_unsupported_api_error(exc):
+                    yield event.plain_result(
+                        "Failed to poke: this protocol client does not support "
+                        "send_poke."
+                    )
+                    return
+                failures += 1
+            if index < len(operations) - 1 and interval > 0:
+                await asyncio.sleep(interval)
+
+        if failures:
+            yield event.plain_result(
+                f"{failures} of {len(operations)} poke operations failed."
+            )
         event.should_call_llm(True)
 
     @filter.command("location")

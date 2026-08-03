@@ -28,24 +28,12 @@
 
 ## 配置
 
-在 AstrBot WebUI 的插件配置中设置：
+AstrBot WebUI 中的插件配置分为四组：
 
-- `user_id_whitelist`：所有命令的使用者 QQ ID 白名单。非空时以白名单作为统一权限规则：名单内 ID 可直接使用命令及 LLM `at_user` 工具，名单外不可使用（管理员也必须在名单中）；留空时沿用下方的管理员权限设置。
-- `admin_only`：全局兜底开关，作为各命令未单独配置时的默认值，默认开启。
-- `himg_admin_only`：`himg` 命令仅管理员可用。
-- `fake_admin_only`：`fake` 命令仅管理员可用。
-- `at_admin_only`：`at` 命令仅管理员可用。
-- `card_admin_only`：`card` 命令仅管理员可用。
-- `poke_admin_only`：`poke` 戳一戳命令仅管理员可用。
-- `location_admin_only`：实验性 `location` 命令仅管理员可用。
-- `voice_admin_only`：`voice` 语音发送命令仅管理员可用。
-- `voicefile_admin_only`：`voicefile` 语音转文件命令仅管理员可用。
-- `face_admin_only`：`face` 命令仅管理员可用。
-- `face_interval`：`face` 范围回应时每个表情之间的间隔秒数（默认 `1`，设为 `0` 则不停顿）。
-- `hface_admin_only`：`hface` 命令仅管理员可用。
-- `at_user_admin_only`：LLM `at_user` 工具仅管理员可用。
-- `parse_admin_only`：`parse` 命令仅管理员可用。
-- `magic_admin_only`：`magic` 命令仅管理员可用。
+- **通用权限**：`user_id_whitelist` 是所有命令的使用者 QQ ID 白名单；非空时名单内 ID 可直接使用全部命令及 LLM `at_user` 工具，名单外不可使用，管理员也必须在名单中。留空时使用 `admin_only` 及各命令权限开关。
+- **各命令权限**：分别提供 `himg_admin_only`、`fake_admin_only`、`at_admin_only`、`card_admin_only`、`poke_admin_only`、`location_admin_only`、`voice_admin_only`、`voicefile_admin_only`、`face_admin_only`、`hface_admin_only`、`parse_admin_only`、`magic_admin_only`、`at_user_admin_only`。
+- **戳一戳设置**：`poke_interval` 控制批量戳一戳每次操作之间的间隔秒数，默认 `1`，设为 `0` 则不停顿。
+- **表情回应设置**：`face_interval` 控制批量回应表情每次操作之间的间隔秒数，默认 `1`，设为 `0` 则不停顿。
 
 白名单非空时会取代管理员权限校验；白名单为空时，各命令的 `<命令名>_admin_only` 默认开启，未设置则回退到 `admin_only`。修改配置后请重载插件。
 
@@ -110,9 +98,21 @@
 /poke <QQ号|群昵称/群名片>
 /poke @群成员
 /poke random
+/poke random 3
+/poke random 3x5
+/poke 123456x5
+/poke @群成员 x 5
 ```
 
-私聊中 `/poke` 会戳当前好友。群聊中不带参数时会戳命令发送者；也可以指定成员 QQ、@ 成员、输入精确的群昵称/群名片，或用 `/poke random`（别名 `/poke r`）随机选择一名群成员。随机选择会排除机器人自身。该命令调用 NapCat 的 `send_poke`，需要 NapCat 的 `packetBackend` 发包能力可用。
+私聊中 `/poke` 会戳当前好友。群聊中不带参数时会戳命令发送者，也可以指定成员 QQ、@ 成员或精确昵称/群名片。
+
+- 普通目标追加 `xN` 可连续戳 N 次；`x` 两侧允许有空格，如 `123x5`、`123 x 5`、`@成员 x5`。
+- `/poke random N`（别名 `r`）随机选择 N 名群成员，各戳一次。
+- `/poke random NxM` 随机选择 N 名群成员，每人戳 M 次；同样支持 `3 x 5` 等空格写法。
+- 随机选择会排除机器人自身；随机人数最多 20，单目标重复最多 100，总操作最多 100。若群内候选人数不足 N，会使用全部可用成员。
+- 批量操作按配置的 `poke_interval` 间隔执行。
+
+该命令调用 NapCat 的 `send_poke`，需要 NapCat 的 `packetBackend` 发包能力可用。
 
 ### 实验性位置卡片
 
