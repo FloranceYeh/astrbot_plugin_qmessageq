@@ -1,17 +1,19 @@
-from __future__ import annotations
-
 import asyncio
+import base64
 import datetime
+import io
 import itertools
 import json
+import os
 import random
 import re
+import wave
 from typing import Any
 
 import astrbot.api.message_components as Comp
 from astrbot import logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import Image, Node
+from astrbot.api.message_components import Image, Node, Record
 from astrbot.api.star import Context, Star
 from astrbot.core.star.filter.command import GreedyStr
 
@@ -113,6 +115,19 @@ def find_attached_image(messages: list) -> Image | None:
     return None
 
 
+def find_attached_record(messages: list) -> Record | None:
+    """Return an audio record attached directly or inside a reply chain."""
+    for seg in messages:
+        if isinstance(seg, Record):
+            return seg
+    for seg in messages:
+        if isinstance(seg, Comp.Reply):
+            for record in seg.chain or []:
+                if isinstance(record, Record):
+                    return record
+    return None
+
+
 _AVATAR_SUFFIX_RE = re.compile(r"(?:^|\s)(?:头像|ava)=(\S+)$")
 
 
@@ -173,7 +188,8 @@ class QmessageQToolbox(Star):
 
     Provides image summary steganography (``himg``), forged forward messages
     (``fake``), real ``@`` mentions (``at``), contact cards (``card``), quoted
-    message reactions (``face``), hidden face sending (``hface``) and an LLM
+    message reactions (``face``), hidden face sending (``hface``), experimental
+    location cards (``location``), audio sending (``voice``) and an LLM
     ``at_user`` tool that prepends an ``@`` to the bot's reply.
     """
 
@@ -1036,8 +1052,120 @@ class QmessageQToolbox(Star):
                 res_id = str(seg.id)
                 forward_ids.append(res_id)
                 content_lines.append(f"合并转发: res_id={res_id}")
+            elif isinstance(seg, Comp.Record):
+                continue
             else:
                 content_lines.append(f"[{getattr(seg, 'type', '?')}]")
+
+    @staticmethod
+    def _format_file_size(value: Any) -> str:
+        """Format a byte count returned by OneBot/NapCat."""
+        try:
+            size = int(value)
+        except (TypeError, ValueError):
+            return str(value or "")
+        if size < 1024:
+            return f"{size} B"
+        if size < 1024 * 1024:
+            return f"{size / 1024:.1f} KiB ({size} B)"
+        return f"{size / 1024 / 1024:.2f} MiB ({size} B)"
+
+    @staticmethod
+    def _wav_duration(record_info: dict) -> float | None:
+        """Read WAV duration from NapCat's get_record result when accessible."""
+        sources: list[Any] = []
+        encoded = record_info.get("base64")
+        if encoded:
+            try:
+                sources.append(io.BytesIO(base64.b64decode(encoded)))
+            except (ValueError, TypeError):
+                pass
+        for key in ("file", "url"):
+            path = record_info.get(key)
+            if isinstance(path, str) and os.path.isfile(path):
+                sources.append(path)
+        for source in sources:
+            try:
+                with wave.open(source, "rb") as wav_file:
+                    rate = wav_file.getframerate()
+                    if rate > 0:
+                        return wav_file.getnframes() / rate
+            except (OSError, EOFError, wave.Error):
+                continue
+        return None
+
+    async def _describe_record(
+        self,
+        event: AstrMessageEvent,
+        message_id: int,
+        data: dict,
+        index: int,
+    ) -> str:
+        """Best-effort details for one voice segment in a parsed message."""
+        file_ref = str(data.get("file") or data.get("file_id") or "")
+
+        async def get_record_info() -> dict:
+            if not file_ref:
+                return {}
+            try:
+                result = await event.bot.call_action(
+                    "get_record",
+                    file=file_ref,
+                    out_format="wav",
+                )
+                return result if isinstance(result, dict) else {}
+            except Exception as exc:
+                logger.debug("parse: get_record failed: %s", exc)
+                return {}
+
+        async def get_transcript() -> str:
+            try:
+                result = await event.bot.call_action(
+                    "fetch_ptt_text",
+                    message_id=message_id,
+                )
+            except Exception as exc:
+                logger.debug("parse: fetch_ptt_text failed: %s", exc)
+                return ""
+            if isinstance(result, dict):
+                return str(result.get("text") or "").strip()
+            return ""
+
+        record_info, transcript = await asyncio.gather(
+            get_record_info(),
+            get_transcript(),
+        )
+        merged = {**data, **record_info}
+        lines = [f"语音 {index}:"]
+
+        duration = data.get("duration")
+        try:
+            duration_value = float(duration) if duration is not None else None
+        except (TypeError, ValueError):
+            duration_value = None
+        if duration_value is None:
+            duration_value = self._wav_duration(record_info)
+        if duration_value is not None:
+            lines.append(f"时长: {duration_value:.2f} 秒")
+        else:
+            lines.append("时长: 协议端未提供，且无法读取转换后的 WAV")
+
+        file_size = merged.get("file_size")
+        if file_size not in (None, ""):
+            lines.append(f"文件大小: {self._format_file_size(file_size)}")
+        file_name = merged.get("file_name") or merged.get("name")
+        if file_name:
+            lines.append(f"文件名: {file_name}")
+        if file_ref:
+            lines.append(f"文件标识: {file_ref}")
+        url = data.get("url") or record_info.get("url")
+        if url and not str(url).startswith("base64://"):
+            lines.append(f"URL/路径: {url}")
+        if transcript:
+            lines.append(f"语音转写: {transcript}")
+        else:
+            lines.append("语音转写: 不可用或识别失败")
+        return "\n".join(lines)
 
     @filter.command("parse")
     @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
@@ -1046,10 +1174,10 @@ class QmessageQToolbox(Star):
 
         Usage: reply to a message, then run ``/parse``. Sends a merge-forward
         message with one node per section: basic info, time, content (text /
-        face ids / mentions), image summaries, emoji reactions and, for a
-        merge-forward message, its node list. Content is read from the reply's
-        own chain when the message can no longer be fetched (sender/time still
-        come from the reply itself).
+        face ids / mentions), voice details, image summaries, emoji reactions
+        and, for a merge-forward message, its node list. Content is read from
+        the reply's own chain when the message can no longer be fetched
+        (sender/time still come from the reply itself).
         """
         if not self._check_permission(event, "parse_admin_only"):
             yield event.plain_result(
@@ -1104,13 +1232,46 @@ class QmessageQToolbox(Star):
 
         content_lines: list[str] = []
         forward_ids: list[str] = []
+        record_data: list[dict] = []
         message = info.get("message") if info else None
         if isinstance(message, list):
-            self._collect_dict_segments(content_lines, forward_ids, message)
+            record_data = [
+                dict(seg.get("data") or {})
+                for seg in message
+                if isinstance(seg, dict) and seg.get("type") == "record"
+            ]
+            non_record_message = [
+                seg
+                for seg in message
+                if not (isinstance(seg, dict) and seg.get("type") == "record")
+            ]
+            self._collect_dict_segments(
+                content_lines,
+                forward_ids,
+                non_record_message,
+            )
         else:
             self._collect_chain(content_lines, forward_ids, reply.chain)
+            record_data = [
+                {
+                    "file": seg.file or "",
+                    "url": seg.url or "",
+                    "path": seg.path or "",
+                    "text": seg.text or "",
+                }
+                for seg in reply.chain or []
+                if isinstance(seg, Comp.Record)
+            ]
         if content_lines:
             section("内容", "\n".join(content_lines))
+        if record_data:
+            record_details = await asyncio.gather(
+                *(
+                    self._describe_record(event, message_id, data, index)
+                    for index, data in enumerate(record_data, start=1)
+                )
+            )
+            section("语音", "\n\n".join(record_details))
 
         likes = info.get("emoji_likes_list") if info else None
         if likes:
@@ -1268,6 +1429,109 @@ class QmessageQToolbox(Star):
         message = [{"type": "contact", "data": {"type": kind, "id": contact_id}}]
         if not await self._send_direct(event, message):
             yield event.plain_result("Failed to send the contact card.")
+            return
+        event.should_call_llm(True)
+
+    @filter.command("location")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def location(self, event: AstrMessageEvent, args: GreedyStr):
+        """Send an experimental OneBot location segment.
+
+        Usage: ``/location`` sends the default empty-shell card. Optionally use
+        ``/location <lat> <lon> [title[||content]]``. Current NapCat builds a
+        placeholder ShareLocation element and may ignore every supplied field;
+        this command intentionally exposes that behavior for testing.
+        """
+        if not self._check_permission(event, "location_admin_only"):
+            yield event.plain_result(
+                self._permission_denied_message(event, "location_admin_only")
+            )
+            return
+
+        lat = 0.0
+        lon = 0.0
+        title = "测试位置"
+        content = ""
+        parts = args.strip().split(maxsplit=2)
+        if parts:
+            if len(parts) < 2:
+                yield event.plain_result(
+                    "Usage: /location [<latitude> <longitude> [title[||content]]]"
+                )
+                return
+            try:
+                lat = float(parts[0])
+                lon = float(parts[1])
+            except ValueError:
+                yield event.plain_result("Invalid coordinates: use decimal numbers.")
+                return
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                yield event.plain_result(
+                    "Invalid coordinates: latitude must be -90..90 and "
+                    "longitude -180..180."
+                )
+                return
+            if len(parts) > 2:
+                title, separator, content = parts[2].partition("||")
+                title = title.strip() or "测试位置"
+                content = content.strip() if separator else ""
+
+        message = [
+            {
+                "type": "location",
+                "data": {
+                    "lat": lat,
+                    "lon": lon,
+                    "title": title,
+                    "content": content,
+                },
+            }
+        ]
+        if not await self._send_direct(event, message):
+            yield event.plain_result("Failed to send the experimental location card.")
+            return
+        event.should_call_llm(True)
+
+    @filter.command("voice")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def voice(self, event: AstrMessageEvent, source: GreedyStr):
+        """Send an attached, quoted or remotely hosted audio file as QQ voice.
+
+        Usage: attach/reply to a voice and run ``/voice``, or use
+        ``/voice <http(s) audio URL>``. Attached audio is converted to base64;
+        NapCat then converts supported input formats to Silk before sending.
+        """
+        if not self._check_permission(event, "voice_admin_only"):
+            yield event.plain_result(
+                self._permission_denied_message(event, "voice_admin_only")
+            )
+            return
+
+        record = find_attached_record(event.get_messages())
+        file = ""
+        if record is not None:
+            try:
+                base64_data = await record.convert_to_base64()
+            except Exception as exc:
+                logger.warning("voice: failed to load the attached audio: %s", exc)
+                yield event.plain_result("Failed to load the attached audio.")
+                return
+            file = f"base64://{base64_data}"
+        else:
+            url = source.strip()
+            if not re.fullmatch(r"https?://\S+", url):
+                yield event.plain_result(
+                    "Missing audio: attach/reply to a voice or use "
+                    "`/voice <audio URL>`."
+                )
+                return
+            file = url
+
+        if not await self._send_direct(
+            event,
+            [{"type": "record", "data": {"file": file}}],
+        ):
+            yield event.plain_result("Failed to send the voice message.")
             return
         event.should_call_llm(True)
 

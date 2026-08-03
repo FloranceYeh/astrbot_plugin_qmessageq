@@ -35,6 +35,18 @@
     "hint": "开启后，card 命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
     "default": true
   },
+  "location_admin_only": {
+    "description": "location 命令仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，实验性 location 位置卡片命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
+    "default": true
+  },
+  "voice_admin_only": {
+    "description": "voice 命令仅管理员可用",
+    "type": "bool",
+    "hint": "开启后，voice 语音发送命令仅对管理员生效；未设置时使用 admin_only 的默认值。",
+    "default": true
+  },
   "face_admin_only": {
     "description": "face 命令仅管理员可用",
     "type": "bool",
