@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="QmessageQ Logo" width="180" />
+  <img src="logo-large.png" alt="QmessageQ Logo" width="180" />
 </p>
 
 <h1 align="center">QmessageQ</h1>
@@ -22,6 +22,7 @@
 
 在 AstrBot WebUI 的插件配置中设置：
 
+- `user_id_whitelist`：所有命令的使用者 QQ ID 白名单。非空时以白名单作为统一权限规则：名单内 ID 可直接使用命令及 LLM `at_user` 工具，名单外不可使用（管理员也必须在名单中）；留空时沿用下方的管理员权限设置。
 - `admin_only`：全局兜底开关，作为各命令未单独配置时的默认值，默认开启。
 - `himg_admin_only`：`himg` 命令仅管理员可用。
 - `fake_admin_only`：`fake` 命令仅管理员可用。
@@ -34,11 +35,11 @@
 - `parse_admin_only`：`parse` 命令仅管理员可用。
 - `magic_admin_only`：`magic` 命令仅管理员可用。
 
-各命令的 `<命令名>_admin_only` 均默认开启，未设置时回退到 `admin_only`。修改配置后请重载插件。
+白名单非空时会取代管理员权限校验；白名单为空时，各命令的 `<命令名>_admin_only` 默认开启，未设置则回退到 `admin_only`。修改配置后请重载插件。
 
 ## 命令
 
-每个命令的权限由各自的 `<命令名>_admin_only` 配置单独控制，未配置时回退到 `admin_only`（默认均仅管理员可用）。
+所有命令首先检查 `user_id_whitelist`：白名单非空时，发送者在名单内即可使用，名单外拒绝，且不再检查管理员权限。白名单为空时，再由各自的 `<命令名>_admin_only` 配置控制管理员权限，未配置则回退到 `admin_only`（默认均仅管理员可用）。
 
 ### 图片藏文案
 

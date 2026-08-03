@@ -198,11 +198,44 @@ class QmessageQToolbox(Star):
     def _check_permission(self, event: AstrMessageEvent, key: str) -> bool:
         """Whether the event sender may use a command.
 
-        Each command gates on its own ``<name>_admin_only`` config, falling back
-        to the global ``admin_only`` when the specific key is not set.
+        When ``user_id_whitelist`` is non-empty, it becomes the access rule for
+        every command. Otherwise each command gates on its own
+        ``<name>_admin_only`` config, falling back to the global ``admin_only``.
         """
+        whitelist = self._user_id_whitelist()
+        if whitelist:
+            sender_id = str(event.get_sender_id() or "").strip()
+            return sender_id in whitelist
         restricted = self.config.get(key, self.config.get("admin_only", True))
         return not restricted or event.is_admin()
+
+    def _user_id_whitelist(self) -> set[str]:
+        """Return normalized QQ IDs allowed to use commands.
+
+        AstrBot normally supplies a list from the config UI, while accepting a
+        comma/newline separated string makes hand-written configuration files
+        work as expected too. An empty list disables the whitelist restriction.
+        """
+        raw = self.config.get("user_id_whitelist", [])
+        if isinstance(raw, str):
+            values = re.split(r"[\s,，、]+", raw)
+        elif isinstance(raw, (list, tuple, set)):
+            values = raw
+        else:
+            values = []
+        return {
+            str(value).strip()
+            for value in values
+            if str(value).strip()
+        }
+
+    def _permission_denied_message(self, event: AstrMessageEvent, key: str) -> str:
+        """Explain whether a command was denied by the ID whitelist or admin gate."""
+        whitelist = self._user_id_whitelist()
+        sender_id = str(event.get_sender_id() or "").strip()
+        if whitelist and sender_id not in whitelist:
+            return "Permission denied: your user ID is not in the command whitelist."
+        return "Permission denied: this command is admin-only."
 
     def _conversation_target(
         self, event: AstrMessageEvent
@@ -302,7 +335,9 @@ class QmessageQToolbox(Star):
         image), or ``/himg <text> <image_url>``.
         """
         if not self._check_permission(event, "himg_admin_only"):
-            yield event.plain_result("Permission denied: this command is admin-only.")
+            yield event.plain_result(
+                self._permission_denied_message(event, "himg_admin_only")
+            )
             return
 
         image = find_attached_image(event.get_messages())
@@ -375,7 +410,9 @@ class QmessageQToolbox(Star):
         An attached image is forwarded as sent by the first forged user.
         """
         if not self._check_permission(event, "fake_admin_only"):
-            yield event.plain_result("Permission denied: this command is admin-only.")
+            yield event.plain_result(
+                self._permission_denied_message(event, "fake_admin_only")
+            )
             return
         if not uin.isdigit():
             yield event.plain_result("Invalid QQ number.")
@@ -450,7 +487,9 @@ class QmessageQToolbox(Star):
         to @ a few random members.
         """
         if not self._check_permission(event, "at_admin_only"):
-            yield event.plain_result("Permission denied: this command is admin-only.")
+            yield event.plain_result(
+                self._permission_denied_message(event, "at_admin_only")
+            )
             return
 
         chain: list = []
@@ -535,7 +574,9 @@ class QmessageQToolbox(Star):
             ``/face 爱心 cancel`` removes the bot's heart reaction.
         """
         if not self._check_permission(event, "face_admin_only"):
-            yield event.plain_result("Permission denied: this command is admin-only.")
+            yield event.plain_result(
+                self._permission_denied_message(event, "face_admin_only")
+            )
             return
         tokens = [tok for tok in re.split(r"\s+", expr.strip()) if tok]
         if not tokens:
@@ -740,7 +781,9 @@ class QmessageQToolbox(Star):
         NapCat's built-in table (see FACES.md).
         """
         if not self._check_permission(event, "hface_admin_only"):
-            yield event.plain_result("Permission denied: this command is admin-only.")
+            yield event.plain_result(
+                self._permission_denied_message(event, "hface_admin_only")
+            )
             return
         tokens = [tok for tok in re.split(r"\s+", expr.strip()) if tok]
         if not tokens:
@@ -1009,7 +1052,9 @@ class QmessageQToolbox(Star):
         come from the reply itself).
         """
         if not self._check_permission(event, "parse_admin_only"):
-            yield event.plain_result("Permission denied: this command is admin-only.")
+            yield event.plain_result(
+                self._permission_denied_message(event, "parse_admin_only")
+            )
             return
         reply = next(
             (seg for seg in event.get_messages() if isinstance(seg, Comp.Reply)),
@@ -1137,7 +1182,9 @@ class QmessageQToolbox(Star):
         reproduced. Run without args for usage.
         """
         if not self._check_permission(event, "magic_admin_only"):
-            yield event.plain_result("Permission denied: this command is admin-only.")
+            yield event.plain_result(
+                self._permission_denied_message(event, "magic_admin_only")
+            )
             return
         reply = next(
             (seg for seg in event.get_messages() if isinstance(seg, Comp.Reply)),
@@ -1205,7 +1252,9 @@ class QmessageQToolbox(Star):
         from the real contact's profile, so the ID must exist.
         """
         if not self._check_permission(event, "card_admin_only"):
-            yield event.plain_result("Permission denied: this command is admin-only.")
+            yield event.plain_result(
+                self._permission_denied_message(event, "card_admin_only")
+            )
             return
         kind = contact_type.lower()
         if kind not in ("qq", "user", "friend", "group"):
@@ -1235,7 +1284,7 @@ class QmessageQToolbox(Star):
             at_all(boolean): When true, @everyone is used and target is ignored.
         """
         if not self._check_permission(event, "at_user_admin_only"):
-            return "Permission denied: at_user is restricted to admins."
+            return self._permission_denied_message(event, "at_user_admin_only")
         if at_all or target.strip().lower() == "all":
             if not event.get_group_id():
                 return "Failed: @everyone is only available in group chats."

@@ -5,6 +5,12 @@
     "hint": "全局兜底开关，作为各命令未单独配置时的默认值；各命令可用下方的 <命令名>_admin_only 单独覆盖。",
     "default": true
   },
+  "user_id_whitelist": {
+    "description": "命令使用者 QQ ID 白名单",
+    "type": "list",
+    "hint": "非空时以此列表作为统一权限规则：只有其中的发送者 QQ ID 可以使用所有命令及 LLM at_user 工具，名单内无需管理员权限，管理员也必须在名单中。留空时沿用 admin_only 设置。",
+    "default": []
+  },
   "himg_admin_only": {
     "description": "himg 命令仅管理员可用",
     "type": "bool",
