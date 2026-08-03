@@ -1480,7 +1480,8 @@ class QmessageQToolbox(Star):
 
         Usage: ``/poke`` pokes the current friend in private chat or the command
         sender in a group. In a group, ``/poke <QQ|@|nickname>`` selects another
-        member. NapCat must have packetBackend sending support available.
+        member and ``/poke random`` selects a random member. NapCat must have
+        packetBackend sending support available.
         """
         if not self._check_permission(event, "poke_admin_only"):
             yield event.plain_result(
@@ -1493,6 +1494,13 @@ class QmessageQToolbox(Star):
             yield event.plain_result("Failed to resolve the current conversation.")
             return
         is_group, peer_id, routing = target_info
+
+        raw_target = target.strip()
+        normalized = raw_target.lstrip("@").strip()
+        random_target = normalized.lower() in ("random", "r")
+        if random_target and not is_group:
+            yield event.plain_result("Random poke is only available in group chats.")
+            return
 
         target_qq = str(peer_id)
         if is_group:
@@ -1507,9 +1515,25 @@ class QmessageQToolbox(Star):
                 ),
                 "",
             )
-            raw_target = target.strip()
-            normalized = raw_target.lstrip("@").strip()
-            if mentioned:
+            if random_target:
+                try:
+                    group = await event.get_group()
+                except Exception as exc:
+                    logger.warning("poke: failed to fetch the group: %s", exc)
+                    group = None
+                candidates = [
+                    str(getattr(member, "user_id", ""))
+                    for member in list(getattr(group, "members", None) or [])
+                    if str(getattr(member, "user_id", "")).isdigit()
+                    and str(getattr(member, "user_id", "")) != self_id
+                ]
+                if not candidates:
+                    yield event.plain_result(
+                        "Failed to choose a random member from this group."
+                    )
+                    return
+                target_qq = random.choice(candidates)
+            elif mentioned:
                 target_qq = mentioned
             elif not normalized or normalized.lower() in ("me", "self", "我", "自己"):
                 target_qq = str(event.get_sender_id() or "")
@@ -1520,7 +1544,7 @@ class QmessageQToolbox(Star):
                 if resolved is None:
                     yield event.plain_result(
                         f"Invalid target '{raw_target}': use a QQ number, @ a "
-                        "member, or enter an exact group nickname/card."
+                        "member, an exact group nickname/card, or 'random'."
                     )
                     return
                 target_qq = resolved
