@@ -16,6 +16,7 @@
 - **转发消息伪装（`/fake`）**：发送合并转发消息，伪造节点的昵称与 QQ 号，还可用 `头像=` / `ava=` 让节点显示指定 QQ 号的头像；支持 `||` 分隔多条消息伪造一段群聊记录；消息附带图片时会伪装成第一个人发的图。
 - **真 @（`/at`）**：发送真实的 @ 提及或 @全体成员；支持群昵称/群名片解析与随机 @ 多名成员。
 - **名片（`/card`）**：发送指定 QQ 或群的真实推荐名片卡片。
+- **戳一戳（`/poke`）**：在私聊中戳当前好友，或在群聊中按 QQ、@、昵称/群名片戳指定成员。
 - **实验性位置（`/location`）**：发送 OneBot `location` 消息段；当前 NapCat 只会构造无有效位置数据的空壳位置卡片，用于测试客户端表现。
 - **发送语音（`/voice`）**：把附带、引用或 URL 指向的音频作为 QQ 语音发送，NapCat 会自动转成 Silk。
 - **回应表情（`/face`）**：引用一条消息后用表情回应（NapCat 的 `set_msg_emoji_like`），支持 `a-b` 范围一次回应多个、`NxM` 对单个表情点/取消交替轰炸， `/face stop` 中止。
@@ -34,6 +35,7 @@
 - `fake_admin_only`：`fake` 命令仅管理员可用。
 - `at_admin_only`：`at` 命令仅管理员可用。
 - `card_admin_only`：`card` 命令仅管理员可用。
+- `poke_admin_only`：`poke` 戳一戳命令仅管理员可用。
 - `location_admin_only`：实验性 `location` 命令仅管理员可用。
 - `voice_admin_only`：`voice` 语音发送命令仅管理员可用。
 - `face_admin_only`：`face` 命令仅管理员可用。
@@ -98,6 +100,16 @@
 /card group <群号>
 ```
 发送该 QQ 或该群的真实推荐名片卡片（NapCat 按目标 ID 生成，ID 必须真实存在）。
+
+### 戳一戳
+
+```
+/poke
+/poke <QQ号|群昵称/群名片>
+/poke @群成员
+```
+
+私聊中 `/poke` 会戳当前好友。群聊中不带参数时会戳命令发送者；也可以指定成员 QQ、@ 成员，或输入精确的群昵称/群名片。该命令调用 NapCat 的 `send_poke`，需要 NapCat 的 `packetBackend` 发包能力可用。
 
 ### 实验性位置卡片
 
@@ -203,11 +215,12 @@ QQ 的「魔法表情/动态表情」不通过 face 段下发，而是以内嵌�
 
 ## 说明
 
-- 命令名固定为 `himg` / `fake` / `at` / `card` / `location` / `voice` / `face` / `hface` / `parse` / `magic`（AstrBot 的 `@filter.command` 在导入时注册，暂不支持按配置动态改名）。
+- 命令名固定为 `himg` / `fake` / `at` / `card` / `poke` / `location` / `voice` / `face` / `hface` / `parse` / `magic`（AstrBot 的 `@filter.command` 在导入时注册，暂不支持按配置动态改名）。
 - `himg` 依赖协议端透传图片段 `summary` 字段（NapCat / LLOneBot 支持），实际渲染效果请以你的客户端为准。
 - `fake` 节点的头像由节点的发送人 QQ 号决定（NapCat 按 `user_id` 渲染），`头像=` / `ava=` 实质是替换节点的发送人 QQ。
 - `location` 依赖协议端实现 OneBot `location` 段；当前 NapCat 仅生成占位 `ShareLocation` 元素，不保证能显示有效位置。
 - `voice` 依赖 NapCat 的语音转换能力；非 Silk 音频通常需要协议端正确配置 FFmpeg。
+- `poke` 依赖 NapCat 的 `send_poke` 扩展接口与可用的 `packetBackend` 发包能力；`group_poke`、`friend_poke` 只是该接口的兼容别名。
 - `face` 依赖协议端的回应动作：NapCat 使用 `set_msg_emoji_like`，LLOneBot 等实现使用 `set_msg_reaction`，插件会自动回退。
 - 表情编号以 NapCat 的 QSid 为准，内置映射与隐藏表情数据见插件目录的 `faces.py`。
 - 仅支持 aiocqhttp（OneBot v11）平台。

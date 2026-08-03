@@ -187,10 +187,11 @@ class QmessageQToolbox(Star):
     """Multi-function QQ message toolbox for aiocqhttp (NapCat/OneBot).
 
     Provides image summary steganography (``himg``), forged forward messages
-    (``fake``), real ``@`` mentions (``at``), contact cards (``card``), quoted
-    message reactions (``face``), hidden face sending (``hface``), experimental
-    location cards (``location``), audio sending (``voice``) and an LLM
-    ``at_user`` tool that prepends an ``@`` to the bot's reply.
+    (``fake``), real ``@`` mentions (``at``), contact cards (``card``), pokes
+    (``poke``), quoted message reactions (``face``), hidden face sending
+    (``hface``), experimental location cards (``location``), audio sending
+    (``voice``) and an LLM ``at_user`` tool that prepends an ``@`` to the bot's
+    reply.
     """
 
     def __init__(self, context: Context, config: dict | None = None) -> None:
@@ -1429,6 +1430,84 @@ class QmessageQToolbox(Star):
         message = [{"type": "contact", "data": {"type": kind, "id": contact_id}}]
         if not await self._send_direct(event, message):
             yield event.plain_result("Failed to send the contact card.")
+            return
+        event.should_call_llm(True)
+
+    @filter.command("poke")
+    @filter.platform_adapter_type(filter.PlatformAdapterType.AIOCQHTTP)
+    async def poke(self, event: AstrMessageEvent, target: GreedyStr):
+        """Poke a friend or a group member through NapCat's packet API.
+
+        Usage: ``/poke`` pokes the current friend in private chat or the command
+        sender in a group. In a group, ``/poke <QQ|@|nickname>`` selects another
+        member. NapCat must have packetBackend sending support available.
+        """
+        if not self._check_permission(event, "poke_admin_only"):
+            yield event.plain_result(
+                self._permission_denied_message(event, "poke_admin_only")
+            )
+            return
+
+        target_info = self._conversation_target(event)
+        if target_info is None:
+            yield event.plain_result("Failed to resolve the current conversation.")
+            return
+        is_group, peer_id, routing = target_info
+
+        target_qq = str(peer_id)
+        if is_group:
+            self_id = str(event.get_self_id() or "")
+            mentioned = next(
+                (
+                    str(seg.qq)
+                    for seg in event.get_messages()
+                    if isinstance(seg, Comp.At)
+                    and str(seg.qq).isdigit()
+                    and str(seg.qq) != self_id
+                ),
+                "",
+            )
+            raw_target = target.strip()
+            normalized = raw_target.lstrip("@").strip()
+            if mentioned:
+                target_qq = mentioned
+            elif not normalized or normalized.lower() in ("me", "self", "我", "自己"):
+                target_qq = str(event.get_sender_id() or "")
+            elif normalized.isdigit():
+                target_qq = normalized
+            else:
+                resolved = await self._resolve_member_qq(event, normalized)
+                if resolved is None:
+                    yield event.plain_result(
+                        f"Invalid target '{raw_target}': use a QQ number, @ a "
+                        "member, or enter an exact group nickname/card."
+                    )
+                    return
+                target_qq = resolved
+
+        if not target_qq.isdigit():
+            yield event.plain_result("Failed to resolve the poke target's QQ ID.")
+            return
+
+        payload: dict[str, Any] = {"user_id": target_qq, **routing}
+        if is_group:
+            payload["group_id"] = str(peer_id)
+        try:
+            await event.bot.call_action("send_poke", **payload)
+        except Exception as exc:
+            logger.warning("poke: send_poke failed: %s", exc)
+            error_text = str(exc).lower()
+            if "packetbackend" in error_text or "发包能力" in error_text:
+                yield event.plain_result(
+                    "Failed to poke: NapCat packetBackend sending support is "
+                    "unavailable."
+                )
+            elif is_unsupported_api_error(exc):
+                yield event.plain_result(
+                    "Failed to poke: this protocol client does not support send_poke."
+                )
+            else:
+                yield event.plain_result("Failed to send the poke.")
             return
         event.should_call_llm(True)
 
